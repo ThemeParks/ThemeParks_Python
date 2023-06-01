@@ -100,6 +100,7 @@ class EntityLiveData(ModelNormal):
             'status': (LiveStatusType,),  # noqa: E501
             'queue': (LiveQueue,),  # noqa: E501
             'showtimes': ([LiveShowTime],),  # noqa: E501
+            'operating_hours': ([LiveShowTime],),  # noqa: E501
         }
 
     @cached_property
@@ -115,6 +116,7 @@ class EntityLiveData(ModelNormal):
         'status': 'status',  # noqa: E501
         'queue': 'queue',  # noqa: E501
         'showtimes': 'showtimes',  # noqa: E501
+        'operating_hours': 'operatingHours',  # noqa: E501
     }
 
     read_only_vars = {
@@ -167,6 +169,7 @@ class EntityLiveData(ModelNormal):
             status (LiveStatusType): [optional]  # noqa: E501
             queue (LiveQueue): [optional]  # noqa: E501
             showtimes ([LiveShowTime]): [optional]  # noqa: E501
+            operating_hours ([LiveShowTime]): [optional]  # noqa: E501
         """
 
         _check_type = kwargs.pop('_check_type', True)
@@ -261,6 +264,7 @@ class EntityLiveData(ModelNormal):
             status (LiveStatusType): [optional]  # noqa: E501
             queue (LiveQueue): [optional]  # noqa: E501
             showtimes ([LiveShowTime]): [optional]  # noqa: E501
+            operating_hours ([LiveShowTime]): [optional]  # noqa: E501
         """
 
         _check_type = kwargs.pop('_check_type', True)
