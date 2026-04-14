@@ -62,8 +62,9 @@ target-version = "py39"
 select = ["E", "F", "W", "I", "N", "UP", "B", "A", "SIM", "PL"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["PLR2004", "F401"]
+"tests/**" = ["PLR2004", "F401", "A004"]
 "themeparks/_errors.py" = ["A001", "UP045"]
+"themeparks/_transport.py" = ["A004"]
 "themeparks/__init__.py" = ["A004"]
 "themeparks/_generated/*.py" = ["N815"]
 
