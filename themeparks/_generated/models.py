@@ -48,32 +48,32 @@ class STANDBY(BaseModel):
 
 
 class SINGLERIDER(BaseModel):
-    waitTime: float
+    waitTime: float | None = None
 
 
 class RETURNTIME(BaseModel):
-    state: ReturnTimeState
-    returnStart: AwareDatetime
-    returnEnd: AwareDatetime
+    state: ReturnTimeState | None = None
+    returnStart: AwareDatetime | None = None
+    returnEnd: AwareDatetime | None = None
 
 
 class PAIDRETURNTIME(BaseModel):
-    state: ReturnTimeState
-    returnStart: AwareDatetime
-    returnEnd: AwareDatetime
-    price: PriceData
+    state: ReturnTimeState | None = None
+    returnStart: AwareDatetime | None = None
+    returnEnd: AwareDatetime | None = None
+    price: PriceData | None = None
 
 
 class BOARDINGGROUP(BaseModel):
-    allocationStatus: BoardingGroupState
-    currentGroupStart: float
-    currentGroupEnd: float
-    nextAllocationTime: AwareDatetime
-    estimatedWait: float
+    allocationStatus: BoardingGroupState | None = None
+    currentGroupStart: float | None = None
+    currentGroupEnd: float | None = None
+    nextAllocationTime: AwareDatetime | None = None
+    estimatedWait: float | None = None
 
 
 class PAIDSTANDBY(BaseModel):
-    waitTime: float
+    waitTime: float | None = None
 
 
 class LiveQueue(BaseModel):
