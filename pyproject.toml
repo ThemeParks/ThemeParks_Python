@@ -66,7 +66,7 @@ select = ["E", "F", "W", "I", "N", "UP", "B", "A", "SIM", "PL"]
 "themeparks/_errors.py" = ["A001", "UP045"]
 "themeparks/_transport.py" = ["A004"]
 "themeparks/__init__.py" = ["A004"]
-"themeparks/_generated/*.py" = ["N815"]
+"themeparks/_generated/*.py" = ["N815", "F401"]
 
 [tool.mypy]
 python_version = "3.9"

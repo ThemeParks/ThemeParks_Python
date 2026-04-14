@@ -28,7 +28,7 @@ with ThemeParks() as tp:
 
     live = tp.entity(MAGIC_KINGDOM).live()
     for item in live.liveData or []:
-        standby = item.queue.STANDBY_1 if item.queue else None  # API field "STANDBY"
+        standby = item.queue.STANDBY if item.queue else None
         wait = standby.waitTime if standby else None
         print(f"{item.name:40s}  {wait} min" if wait is not None else f"{item.name:40s}  (closed)")
 ```

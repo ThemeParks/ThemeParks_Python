@@ -43,28 +43,28 @@ class PriceData(BaseModel):
     formatted: str | None = None
 
 
-class STANDBY(BaseModel):
+class StandbyQueue(BaseModel):
     waitTime: float | None = None
 
 
-class SINGLERIDER(BaseModel):
+class SingleRiderQueue(BaseModel):
     waitTime: float | None = None
 
 
-class RETURNTIME(BaseModel):
+class ReturnTimeQueue(BaseModel):
     state: ReturnTimeState | None = None
     returnStart: AwareDatetime | None = None
     returnEnd: AwareDatetime | None = None
 
 
-class PAIDRETURNTIME(BaseModel):
+class PaidReturnTimeQueue(BaseModel):
     state: ReturnTimeState | None = None
     returnStart: AwareDatetime | None = None
     returnEnd: AwareDatetime | None = None
     price: PriceData | None = None
 
 
-class BOARDINGGROUP(BaseModel):
+class BoardingGroupQueue(BaseModel):
     allocationStatus: BoardingGroupState | None = None
     currentGroupStart: float | None = None
     currentGroupEnd: float | None = None
@@ -72,17 +72,17 @@ class BOARDINGGROUP(BaseModel):
     estimatedWait: float | None = None
 
 
-class PAIDSTANDBY(BaseModel):
+class PaidStandbyQueue(BaseModel):
     waitTime: float | None = None
 
 
 class LiveQueue(BaseModel):
-    STANDBY_1: Annotated[STANDBY | None, Field(alias='STANDBY')] = None
-    SINGLE_RIDER: SINGLERIDER | None = None
-    RETURN_TIME: RETURNTIME | None = None
-    PAID_RETURN_TIME: PAIDRETURNTIME | None = None
-    BOARDING_GROUP: BOARDINGGROUP | None = None
-    PAID_STANDBY: PAIDSTANDBY | None = None
+    STANDBY: StandbyQueue | None = None
+    SINGLE_RIDER: SingleRiderQueue | None = None
+    RETURN_TIME: ReturnTimeQueue | None = None
+    PAID_RETURN_TIME: PaidReturnTimeQueue | None = None
+    BOARDING_GROUP: BoardingGroupQueue | None = None
+    PAID_STANDBY: PaidStandbyQueue | None = None
 
 
 class LiveShowTime(BaseModel):

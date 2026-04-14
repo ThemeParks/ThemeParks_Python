@@ -14,25 +14,68 @@ from pathlib import Path
 SPEC_URL = "https://api.themeparks.wiki/docs/v1.yaml"
 OUTPUT = Path(__file__).resolve().parents[1] / "themeparks" / "_generated" / "models.py"
 
+# Rename queue variant classes so they don't collide with LiveQueue field names.
+# The upstream OpenAPI spec names the variant schemas STANDBY/SINGLERIDER/etc.,
+# which collide with the LiveQueue field names; datamodel-code-generator works
+# around this by renaming the LiveQueue.STANDBY attribute to STANDBY_1 with an
+# alias, which is a painful UX wart. Renaming the variant classes eliminates
+# the collision and lets us keep the attribute name matching the API field.
+CLASS_RENAMES: dict[str, str] = {
+    "STANDBY": "StandbyQueue",
+    "SINGLERIDER": "SingleRiderQueue",
+    "RETURNTIME": "ReturnTimeQueue",
+    "PAIDRETURNTIME": "PaidReturnTimeQueue",
+    "BOARDINGGROUP": "BoardingGroupQueue",
+    "PAIDSTANDBY": "PaidStandbyQueue",
+}
+
 # (class_name, field_name) pairs for fields the OpenAPI spec marks nullable
 # but datamodel-code-generator does not honor when the field is required.
+# Keyed on the post-rename class names (see CLASS_RENAMES).
 NULLABLE_PATCHES: list[tuple[str, str]] = [
-    ("STANDBY", "waitTime"),
-    ("SINGLERIDER", "waitTime"),
-    ("PAIDSTANDBY", "waitTime"),
-    ("RETURNTIME", "state"),
-    ("RETURNTIME", "returnStart"),
-    ("RETURNTIME", "returnEnd"),
-    ("PAIDRETURNTIME", "state"),
-    ("PAIDRETURNTIME", "returnStart"),
-    ("PAIDRETURNTIME", "returnEnd"),
-    ("PAIDRETURNTIME", "price"),
-    ("BOARDINGGROUP", "allocationStatus"),
-    ("BOARDINGGROUP", "currentGroupStart"),
-    ("BOARDINGGROUP", "currentGroupEnd"),
-    ("BOARDINGGROUP", "nextAllocationTime"),
-    ("BOARDINGGROUP", "estimatedWait"),
+    ("StandbyQueue", "waitTime"),
+    ("SingleRiderQueue", "waitTime"),
+    ("PaidStandbyQueue", "waitTime"),
+    ("ReturnTimeQueue", "state"),
+    ("ReturnTimeQueue", "returnStart"),
+    ("ReturnTimeQueue", "returnEnd"),
+    ("PaidReturnTimeQueue", "state"),
+    ("PaidReturnTimeQueue", "returnStart"),
+    ("PaidReturnTimeQueue", "returnEnd"),
+    ("PaidReturnTimeQueue", "price"),
+    ("BoardingGroupQueue", "allocationStatus"),
+    ("BoardingGroupQueue", "currentGroupStart"),
+    ("BoardingGroupQueue", "currentGroupEnd"),
+    ("BoardingGroupQueue", "nextAllocationTime"),
+    ("BoardingGroupQueue", "estimatedWait"),
 ]
+
+
+def apply_class_renames(text: str) -> str:
+    """Rename queue variant classes to avoid colliding with LiveQueue fields."""
+    for old, new in CLASS_RENAMES.items():
+        text = re.sub(rf"\b{old}\b", new, text)
+    return text
+
+
+def normalize_live_queue(text: str) -> str:
+    """Revert the aliased STANDBY_1 attribute on LiveQueue to a plain STANDBY.
+
+    datamodel-codegen emits:
+        STANDBY_1: Annotated[STANDBY | None, Field(alias='STANDBY')] = None
+    After :func:`apply_class_renames` runs, the bare ``STANDBY`` class
+    reference (and the ``alias='STANDBY'`` string literal) are both rewritten
+    to ``StandbyQueue``:
+        STANDBY_1: Annotated[StandbyQueue | None, Field(alias='StandbyQueue')] = None
+    Since the variant class is no longer named STANDBY, the collision that
+    forced the alias is gone and we can restore the natural attribute name.
+    This must run *after* :func:`apply_class_renames`.
+    """
+    return re.sub(
+        r"STANDBY_1: Annotated\[StandbyQueue \| None, Field\(alias='StandbyQueue'\)\] = None",
+        "STANDBY: StandbyQueue | None = None",
+        text,
+    )
 
 
 def apply_nullable_patches(text: str) -> str:
@@ -93,9 +136,15 @@ def main() -> None:
     print("Running:", " ".join(cmd))
     subprocess.run(cmd, check=True)
 
-    print("Applying post-generation nullable patches...")
+    print("Applying post-generation patches...")
     original = OUTPUT.read_text()
-    patched = apply_nullable_patches(original)
+    # Order matters: apply_class_renames first (which also rewrites the
+    # alias='STANDBY' string literal on LiveQueue.STANDBY_1), then
+    # normalize_live_queue to collapse the now-redundant alias, then
+    # apply_nullable_patches (keyed on the post-rename class names).
+    patched = apply_class_renames(original)
+    patched = normalize_live_queue(patched)
+    patched = apply_nullable_patches(patched)
     if patched != original:
         OUTPUT.write_text(patched)
         print(f"  patched {OUTPUT}")

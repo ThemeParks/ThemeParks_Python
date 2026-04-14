@@ -6,11 +6,11 @@ from typing import Any
 
 from themeparks._generated.models import EntityLiveData
 
-# Map internal pydantic attribute names to API-facing alias names.
-# The LiveQueue model's STANDBY field is renamed to STANDBY_1 by the generator
-# because it collides with the STANDBY class name; we re-map back here.
-_QUEUE_ALIAS: dict[str, str] = {
-    "STANDBY_1": "STANDBY",
+# Python attribute -> API-facing type name for each LiveQueue variant.
+# The attribute names here match the API field names verbatim thanks to the
+# queue-variant class renames applied by ``scripts/regenerate.py``.
+_QUEUE_TYPES: dict[str, str] = {
+    "STANDBY": "STANDBY",
     "SINGLE_RIDER": "SINGLE_RIDER",
     "RETURN_TIME": "RETURN_TIME",
     "PAID_RETURN_TIME": "PAID_RETURN_TIME",
@@ -24,7 +24,7 @@ def current_wait_time(entry: EntityLiveData) -> int | None:
     queue = entry.queue
     if queue is None:
         return None
-    standby = queue.STANDBY_1
+    standby = queue.STANDBY
     if standby is None or standby.waitTime is None:
         return None
     return int(standby.waitTime)
@@ -35,8 +35,8 @@ def iter_queues(entry: EntityLiveData) -> Iterator[dict[str, Any]]:
     queue = entry.queue
     if queue is None:
         return
-    for attr, alias in _QUEUE_ALIAS.items():
+    for attr, type_name in _QUEUE_TYPES.items():
         payload = getattr(queue, attr, None)
         if payload is None:
             continue
-        yield {"type": alias, **payload.model_dump()}
+        yield {"type": type_name, **payload.model_dump()}

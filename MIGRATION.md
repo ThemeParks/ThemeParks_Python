@@ -106,9 +106,7 @@ except openapi_client.exceptions.ApiTypeError:
 ```python
 live = tp.entity(park_id).live()
 for item in live.liveData or []:
-    # The API's "STANDBY" queue is exposed as `STANDBY_1` on the pydantic model
-    # (the alias "STANDBY" is preserved for serialization).
-    standby = item.queue.STANDBY_1 if item.queue else None
+    standby = item.queue.STANDBY if item.queue else None
     wait = standby.waitTime if standby else None
     if wait is None:
         print(f"{item.name}: closed / no data")
