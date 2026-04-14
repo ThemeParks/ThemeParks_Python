@@ -61,6 +61,11 @@ target-version = "py39"
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP", "B", "A", "SIM", "PL"]
 
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["PLR2004", "F401"]
+"themeparks/_errors.py" = ["A001", "UP045"]
+"themeparks/__init__.py" = ["A004"]
+
 [tool.mypy]
 python_version = "3.9"
 strict = true
