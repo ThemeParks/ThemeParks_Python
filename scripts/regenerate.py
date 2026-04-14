@@ -58,7 +58,7 @@ def apply_class_renames(text: str) -> str:
     return text
 
 
-def normalize_live_queue(text: str) -> str:
+def normalize_live_queue(text: str) -> tuple[str, int]:
     """Revert the aliased STANDBY_1 attribute on LiveQueue to a plain STANDBY.
 
     datamodel-codegen emits:
@@ -70,8 +70,11 @@ def normalize_live_queue(text: str) -> str:
     Since the variant class is no longer named STANDBY, the collision that
     forced the alias is gone and we can restore the natural attribute name.
     This must run *after* :func:`apply_class_renames`.
+
+    Returns ``(patched_text, n_substitutions)`` so the caller can warn loudly
+    when zero substitutions occurred (datamodel-codegen output drift).
     """
-    return re.sub(
+    return re.subn(
         r"STANDBY_1: Annotated\[StandbyQueue \| None, Field\(alias='StandbyQueue'\)\] = None",
         "STANDBY: StandbyQueue | None = None",
         text,
@@ -143,13 +146,46 @@ def main() -> None:
     # normalize_live_queue to collapse the now-redundant alias, then
     # apply_nullable_patches (keyed on the post-rename class names).
     patched = apply_class_renames(original)
-    patched = normalize_live_queue(patched)
+    patched, n_normalized = normalize_live_queue(patched)
+    if n_normalized == 0:
+        print(
+            "warning: STANDBY_1 alias normalization did not run - "
+            "datamodel-codegen output may have drifted; please inspect models.py",
+            file=sys.stderr,
+        )
     patched = apply_nullable_patches(patched)
     if patched != original:
         OUTPUT.write_text(patched)
         print(f"  patched {OUTPUT}")
     else:
         print("  no changes (already patched?)")
+
+    # Post-generation sanity check. The running process already imported the
+    # stale pre-patch module (if at all), so spawn a subprocess for a fresh
+    # import that reflects what downstream users will see.
+    print("Verifying post-generation invariants...")
+    verify = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "from themeparks._generated.models import LiveQueue;"
+                "fields = LiveQueue.model_fields;"
+                "assert 'STANDBY' in fields, "
+                "'post-gen patch failed: STANDBY not found';"
+                "assert 'STANDBY_1' not in fields, "
+                "'post-gen patch failed: STANDBY_1 leaked'"
+            ),
+        ],
+        check=False,
+    )
+    if verify.returncode != 0:
+        print(
+            "error: post-generation invariants failed; see traceback above.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    print("  OK")
 
 
 if __name__ == "__main__":
