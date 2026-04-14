@@ -32,13 +32,23 @@ def test_rate_limit_error_extends_api_error():
 
 
 def test_network_error_wraps_cause():
-    cause = RuntimeError("econnreset")
-    e = NetworkError("network failure")
-    e.__cause__ = cause
-    assert isinstance(e, ThemeParksError)
-    assert e.__cause__ is cause
+    try:
+        raise NetworkError("network failure") from RuntimeError("econnreset")
+    except NetworkError as e:
+        assert isinstance(e.__cause__, RuntimeError)
+        assert str(e.__cause__) == "econnreset"
 
 
 def test_timeout_error_is_themeparks_error():
     e = ThemeParksTimeoutError("timed out")
     assert isinstance(e, ThemeParksError)
+
+
+def test_api_error_repr_includes_status_and_url():
+    e = APIError("boom", status=500, body=None, url="/x")
+    assert repr(e) == "APIError(status=500, url='/x')"
+
+
+def test_rate_limit_error_repr_uses_subclass_name():
+    e = RateLimitError("rate limited", status=429, body=None, url="/x")
+    assert repr(e) == "RateLimitError(status=429, url='/x')"

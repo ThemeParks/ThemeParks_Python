@@ -17,6 +17,9 @@ class APIError(ThemeParksError):
         self.body = body
         self.url = url
 
+    def __repr__(self) -> str:
+        return f"{type(self).__name__}(status={self.status}, url={self.url!r})"
+
 
 class RateLimitError(APIError):
     """Raised when the API responds 429. `retry_after` is seconds, if present."""
@@ -28,7 +31,7 @@ class RateLimitError(APIError):
         status: int,
         body: Any,
         url: str,
-        retry_after: Optional[float],
+        retry_after: Optional[float] = None,
     ) -> None:
         super().__init__(message, status=status, body=body, url=url)
         self.retry_after = retry_after
