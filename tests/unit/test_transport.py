@@ -11,7 +11,7 @@ def make_transport(handler, *, retry_max=0, on_429=True) -> SyncTransport:
         client=client,
         base_url="https://x/v1",
         user_agent="test/1",
-        retry=RetryConfig(max_attempts=retry_max, respect_429=on_429),
+        retry=RetryConfig(max_retries=retry_max, respect_429=on_429),
         sleep=lambda _: None,
     )
 

@@ -19,7 +19,7 @@ _STATUS_SERVER_ERROR = 500
 
 @dataclass
 class RetryConfig:
-    max_attempts: int = 3
+    max_retries: int = 3
     respect_429: bool = True
 
 
@@ -84,7 +84,7 @@ class SyncTransport:
             except httpx.TimeoutException as exc:
                 raise TimeoutError(f"request to {url} timed out") from exc
             except httpx.HTTPError as exc:
-                if attempt < self._retry.max_attempts:
+                if attempt < self._retry.max_retries:
                     self._sleep(_backoff(attempt))
                     attempt += 1
                     continue
@@ -99,7 +99,7 @@ class SyncTransport:
             if (
                 status == _STATUS_TOO_MANY_REQUESTS
                 and self._retry.respect_429
-                and attempt < self._retry.max_attempts
+                and attempt < self._retry.max_retries
             ):
                 ra = _parse_retry_after(response.headers.get("retry-after"))
                 self._sleep(ra if ra is not None else _backoff(attempt))
@@ -113,7 +113,7 @@ class SyncTransport:
                     url=url,
                     retry_after=_parse_retry_after(response.headers.get("retry-after")),
                 )
-            if status >= _STATUS_SERVER_ERROR and attempt < self._retry.max_attempts:
+            if status >= _STATUS_SERVER_ERROR and attempt < self._retry.max_retries:
                 self._sleep(_backoff(attempt))
                 attempt += 1
                 continue
@@ -152,7 +152,7 @@ class AsyncTransport:
             except httpx.TimeoutException as exc:
                 raise TimeoutError(f"request to {url} timed out") from exc
             except httpx.HTTPError as exc:
-                if attempt < self._retry.max_attempts:
+                if attempt < self._retry.max_retries:
                     await self._sleep(_backoff(attempt))
                     attempt += 1
                     continue
@@ -167,7 +167,7 @@ class AsyncTransport:
             if (
                 status == _STATUS_TOO_MANY_REQUESTS
                 and self._retry.respect_429
-                and attempt < self._retry.max_attempts
+                and attempt < self._retry.max_retries
             ):
                 ra = _parse_retry_after(response.headers.get("retry-after"))
                 await self._sleep(ra if ra is not None else _backoff(attempt))
@@ -181,7 +181,7 @@ class AsyncTransport:
                     url=url,
                     retry_after=_parse_retry_after(response.headers.get("retry-after")),
                 )
-            if status >= _STATUS_SERVER_ERROR and attempt < self._retry.max_attempts:
+            if status >= _STATUS_SERVER_ERROR and attempt < self._retry.max_retries:
                 await self._sleep(_backoff(attempt))
                 attempt += 1
                 continue

@@ -27,7 +27,7 @@ def make_raw(body) -> RawClient:
         client=client,
         base_url="https://x/v1",
         user_agent="t/1",
-        retry=RetryConfig(max_attempts=0),
+        retry=RetryConfig(max_retries=0),
         sleep=lambda _: None,
     )
     return RawClient(transport=t)
@@ -66,7 +66,7 @@ def test_get_entity_schedule_month_builds_correct_path():
         client=client,
         base_url="https://x/v1",
         user_agent="t/1",
-        retry=RetryConfig(max_attempts=0),
+        retry=RetryConfig(max_retries=0),
         sleep=lambda _: None,
     )
     RawClient(transport=t).get_entity_schedule_month("abc", 2026, 4)

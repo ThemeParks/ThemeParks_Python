@@ -63,7 +63,7 @@ Both `ThemeParks` and `AsyncThemeParks` take the same keyword-only options:
 | `base_url`   | `str`                                    | `https://api.themeparks.wiki/v1`     | API base URL (point at a mock / staging if you need to). |
 | `user_agent` | `str \| None`                            | `themeparks-sdk-py/<version>`        | Sent as the `User-Agent` header. Set this to identify your app. |
 | `timeout`    | `float` (seconds)                        | `10.0`                               | Per-request timeout. |
-| `retry`      | `RetryConfig \| None`                    | `RetryConfig(max_attempts=3, respect_429=True)` | Retry/backoff behavior. |
+| `retry`      | `RetryConfig \| None`                    | `RetryConfig(max_retries=3, respect_429=True)` | Retry/backoff behavior. `max_retries` is N retries beyond the first attempt (so N+1 total calls). |
 | `cache`      | `Cache \| CacheConfig \| bool \| None`   | `True` (in-memory LRU)               | See **Caching** below. `False` disables caching entirely. |
 
 Example:
@@ -74,7 +74,7 @@ from themeparks import ThemeParks, RetryConfig
 tp = ThemeParks(
     user_agent="my-app/1.2.3 (+https://example.com)",
     timeout=15.0,
-    retry=RetryConfig(max_attempts=5, respect_429=True),
+    retry=RetryConfig(max_retries=5, respect_429=True),
 )
 ```
 

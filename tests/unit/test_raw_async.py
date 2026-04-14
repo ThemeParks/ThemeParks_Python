@@ -31,7 +31,7 @@ def make_async_raw(body) -> AsyncRawClient:
         client=client,
         base_url="https://x/v1",
         user_agent="t/1",
-        retry=RetryConfig(max_attempts=0),
+        retry=RetryConfig(max_retries=0),
         sleep=_noop_sleep,
     )
     return AsyncRawClient(transport=t)
@@ -63,7 +63,7 @@ async def test_async_get_entity_schedule_month():
         client=client,
         base_url="https://x/v1",
         user_agent="t/1",
-        retry=RetryConfig(max_attempts=0),
+        retry=RetryConfig(max_retries=0),
         sleep=_noop_sleep,
     )
     await AsyncRawClient(transport=t).get_entity_schedule_month("abc", 2026, 4)
