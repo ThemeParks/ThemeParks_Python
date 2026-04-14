@@ -53,3 +53,23 @@ def test_walk_bfs_and_dedupes():
     )
     ids = [c.id for c in tp.entity("root").walk()]
     assert ids == ["a", "b", "c"]
+
+
+def test_sync_entity_children_live_and_schedule_upcoming():
+    def handler(req):
+        if req.url.path.endswith("/children"):
+            return httpx.Response(
+                200,
+                json={"id": "abc", "children": [{"id": "x", "name": "X", "entityType": "PARK"}]},
+            )
+        if req.url.path.endswith("/live"):
+            return httpx.Response(200, json={"id": "abc", "name": "X", "liveData": []})
+        if req.url.path.endswith("/schedule"):
+            return httpx.Response(200, json={"schedule": []})
+        return httpx.Response(404)
+
+    tp = ThemeParks(transport=httpx.MockTransport(handler), cache=False)
+    h = tp.entity("abc")
+    assert h.children().children[0].id == "x"
+    assert h.live().id == "abc"
+    assert h.schedule.upcoming().schedule == []
