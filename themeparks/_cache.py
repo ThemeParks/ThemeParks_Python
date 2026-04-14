@@ -4,7 +4,13 @@ from __future__ import annotations
 import re
 import time
 from collections import OrderedDict
+from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
+
+
+@dataclass
+class CacheConfig:
+    max_entries: int = 500
 
 HOUR = 3600
 FIVE_MINUTES = 300
