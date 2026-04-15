@@ -85,6 +85,10 @@ Sample output:
 (parks, attractions, restaurants, hotels, shows). Group the ones with known
 coordinates by `entityType`:
 
+> One API call. The `/children` endpoint returns the entire descendant tree
+> in a single response, so even for the largest destinations this is one
+> HTTP request.
+
 ```python
 from collections import defaultdict
 from themeparks import ThemeParks

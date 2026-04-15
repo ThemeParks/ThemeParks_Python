@@ -60,10 +60,10 @@ class EntityHandle:
 
     Obtained via ``tp.entity(entity_id)``. Provides :meth:`get` for the entity
     record, :meth:`children` for direct children, :meth:`live` for current
-    wait/queue data, :meth:`walk` for a lazy BFS over all descendants, and
-    ``.schedule`` for ``upcoming`` / ``month`` / ``range`` helpers. All calls
-    flow through the shared :class:`~themeparks._raw.RawClient` and therefore
-    share the client's cache.
+    wait/queue data, :meth:`walk` for an iterator over every descendant (one
+    API call), and ``.schedule`` for ``upcoming`` / ``month`` / ``range``
+    helpers. All calls flow through the shared
+    :class:`~themeparks._raw.RawClient` and therefore share the client's cache.
 
     Example:
         >>> with ThemeParks() as tp:
@@ -87,17 +87,14 @@ class EntityHandle:
         return self._raw.get_entity_live(self.entity_id)
 
     def walk(self) -> Iterator[EntityChild]:
-        visited = {self.entity_id}
-        queue = [self.entity_id]
-        while queue:
-            current = queue.pop(0)
-            res = self._raw.get_entity_children(current)
-            for child in res.children or []:
-                if child.id in visited:
-                    continue
-                visited.add(child.id)
-                queue.append(child.id)
-                yield child
+        """Yield every descendant of this entity in a single API call.
+
+        The ThemeParks API's ``/children`` endpoint returns the entire
+        subtree in one response — this method just exposes it as an
+        iterator. The root entity itself is not yielded.
+        """
+        res = self._raw.get_entity_children(self.entity_id)
+        yield from res.children or []
 
 
 class _AsyncScheduleApi:
@@ -131,10 +128,9 @@ class AsyncEntityHandle:
     """Asynchronous mirror of :class:`EntityHandle`.
 
     Same method set (``get``, ``children``, ``live``, ``walk``, ``schedule``)
-    but all network-bound methods are coroutines. :meth:`walk` is an async
-    iterator that fetches each BFS level concurrently (bounded by a
-    ``concurrency`` parameter), and ``schedule.range`` fans out month fetches
-    via ``asyncio.gather``.
+    but all network-bound methods are coroutines. :meth:`walk` exposes the
+    recursive ``/children`` response as an async iterator, and
+    ``schedule.range`` fans out month fetches via ``asyncio.gather``.
 
     Example:
         >>> async with AsyncThemeParks() as tp:
@@ -157,29 +153,13 @@ class AsyncEntityHandle:
     async def live(self) -> EntityLiveDataResponse:
         return await self._raw.get_entity_live(self.entity_id)
 
-    async def walk(self, *, concurrency: int = 8) -> AsyncIterator[EntityChild]:
-        """BFS over an entity's descendants with bounded parallelism.
+    async def walk(self) -> AsyncIterator[EntityChild]:
+        """Yield every descendant of this entity in a single API call.
 
-        Fetches all children within a BFS level concurrently (capped by
-        ``concurrency``) before advancing to the next level. Yields children
-        in BFS order and deduplicates by id.
+        The ThemeParks API's ``/children`` endpoint returns the entire
+        subtree in one response — this method just exposes it as an
+        async iterator. The root entity itself is not yielded.
         """
-        visited = {self.entity_id}
-        current_level = [self.entity_id]
-        semaphore = asyncio.Semaphore(concurrency)
-
-        async def fetch_children(entity_id: str) -> EntityChildrenResponse:
-            async with semaphore:
-                return await self._raw.get_entity_children(entity_id)
-
-        while current_level:
-            responses = await asyncio.gather(*(fetch_children(eid) for eid in current_level))
-            next_level: list[str] = []
-            for res in responses:
-                for child in res.children or []:
-                    if child.id in visited:
-                        continue
-                    visited.add(child.id)
-                    next_level.append(child.id)
-                    yield child
-            current_level = next_level
+        res = await self._raw.get_entity_children(self.entity_id)
+        for child in res.children or []:
+            yield child

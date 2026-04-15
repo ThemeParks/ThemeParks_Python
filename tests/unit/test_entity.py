@@ -9,8 +9,10 @@ def sequential_handler(responses):
     def h(req):
         r = responses[idx["i"]]
         idx["i"] += 1
+        h.call_count = idx["i"]
         return httpx.Response(200, json=r)
 
+    h.call_count = 0
     return h
 
 
@@ -29,28 +31,24 @@ def test_get_calls_entity_path():
     assert e.id == "abc"
 
 
-def test_walk_bfs_and_dedupes():
-    responses = [
-        {
-            "id": "root",
-            "children": [
-                {"id": "a", "name": "A", "entityType": "PARK"},
-                {"id": "b", "name": "B", "entityType": "PARK"},
-            ],
-        },
-        {
-            "id": "a",
-            "children": [{"id": "c", "name": "C", "entityType": "ATTRACTION"}],
-        },
-        {
-            "id": "b",
-            "children": [{"id": "c", "name": "C", "entityType": "ATTRACTION"}],
-        },
-        {"id": "c", "children": []},
-    ]
-    tp = ThemeParks(transport=httpx.MockTransport(sequential_handler(responses)), cache=False)
+def test_walk_yields_all_descendants_from_single_call():
+    fn = sequential_handler(
+        [
+            {
+                "id": "root",
+                "entityType": "DESTINATION",
+                "children": [
+                    {"id": "a", "name": "A", "entityType": "PARK"},
+                    {"id": "b", "name": "B", "entityType": "PARK"},
+                    {"id": "c", "name": "C", "entityType": "ATTRACTION"},
+                ],
+            },
+        ]
+    )
+    tp = ThemeParks(transport=httpx.MockTransport(fn), cache=False)
     ids = [c.id for c in tp.entity("root").walk()]
     assert ids == ["a", "b", "c"]
+    assert fn.call_count == 1
 
 
 def test_sync_entity_children_live_and_schedule_upcoming():
