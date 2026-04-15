@@ -170,7 +170,7 @@ The async surface mirrors the sync surface method-for-method.
 
 ## New in v2 (not in v1)
 
-- `tp.entity(id).walk()` — breadth-first iterator over every descendant.
+- `tp.entity(id).walk()` — iterator over every descendant in a single API call (the `/children` endpoint already returns the full subtree).
 - `tp.entity(id).schedule.range(start, end)` — stitches monthly schedule
   responses into a single sorted, filtered list.
 - `tp.destinations.find(query)` — case-insensitive lookup by slug or name.

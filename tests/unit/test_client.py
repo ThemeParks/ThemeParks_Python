@@ -56,3 +56,16 @@ def test_context_manager_closes_client():
 async def test_async_context_manager():
     async with AsyncThemeParks() as tp:
         assert tp is not None
+
+
+def test_repr_includes_base_url():
+    tp = ThemeParks(base_url="https://example.com/v1")
+    assert repr(tp) == "ThemeParks(base_url='https://example.com/v1')"
+    tp.close()
+
+
+@pytest.mark.asyncio
+async def test_async_repr_includes_base_url():
+    tp = AsyncThemeParks(base_url="https://example.com/v1")
+    assert repr(tp) == "AsyncThemeParks(base_url='https://example.com/v1')"
+    await tp.close()

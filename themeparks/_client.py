@@ -118,6 +118,9 @@ class ThemeParks:
     def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
         self.close()
 
+    def __repr__(self) -> str:
+        return f"ThemeParks(base_url={str(self._client.base_url).rstrip('/')!r})"
+
 
 class AsyncThemeParks:
     """Asynchronous mirror of :class:`ThemeParks`.
@@ -171,3 +174,6 @@ class AsyncThemeParks:
 
     async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
         await self.close()
+
+    def __repr__(self) -> str:
+        return f"AsyncThemeParks(base_url={str(self._client.base_url).rstrip('/')!r})"

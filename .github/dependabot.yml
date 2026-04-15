@@ -1,0 +1,36 @@
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+    open-pull-requests-limit: 5
+    groups:
+      dev-dependencies:
+        patterns:
+          - "ruff"
+          - "mypy"
+          - "pytest*"
+          - "datamodel-code-generator"
+          - "mkdocs*"
+          - "build"
+      runtime-dependencies:
+        patterns:
+          - "httpx"
+          - "pydantic"
+          - "typing-extensions"
+          - "eval-type-backport"
+    commit-message:
+      prefix: "deps"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
