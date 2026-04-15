@@ -126,11 +126,63 @@ with ThemeParks() as tp:
     print(f"{len(entries)} schedule entries")
 ```
 
-### More live-data helpers
+### Reading every queue type
 
-`current_wait_time` covers the standby-queue case. For attractions that use
-return times, boarding groups, or paid lines, iterate every queue variant on
-an entry with `iter_queues`:
+`current_wait_time` covers the standby-queue case. There are six queue
+variants in total, and an attraction may have more than one populated at
+once (e.g. STANDBY + SINGLE_RIDER + PAID_STANDBY for a Lightning Lane ride).
+
+Each variant is exposed as an attribute on `entry.queue`. All are
+`Optional` — `None` if that queue type isn't offered for the attraction:
+
+| Attribute              | Type                  | Fields                                                                                              |
+|------------------------|-----------------------|------------------------------------------------------------------------------------------------------|
+| `queue.STANDBY`        | `StandbyQueue`        | `waitTime: int \| None`                                                                              |
+| `queue.SINGLE_RIDER`   | `SingleRiderQueue`    | `waitTime: int \| None`                                                                              |
+| `queue.PAID_STANDBY`   | `PaidStandbyQueue`    | `waitTime: int \| None`                                                                              |
+| `queue.RETURN_TIME`    | `ReturnTimeQueue`     | `state`, `returnStart`, `returnEnd`                                                                  |
+| `queue.PAID_RETURN_TIME` | `PaidReturnTimeQueue` | `state`, `returnStart`, `returnEnd`, `price`                                                       |
+| `queue.BOARDING_GROUP` | `BoardingGroupQueue`  | `allocationStatus`, `currentGroupStart`, `currentGroupEnd`, `nextAllocationTime`, `estimatedWait` |
+
+#### Direct access
+
+```python
+from themeparks import ThemeParks
+
+with ThemeParks() as tp:
+    live = tp.entity("75ea578a-adc8-4116-a54d-dccb60765ef9").live()
+    for entry in live.liveData or []:
+        if entry.queue is None:
+            continue
+
+        # Standby
+        if entry.queue.STANDBY and entry.queue.STANDBY.waitTime is not None:
+            print(f"{entry.name}: standby {entry.queue.STANDBY.waitTime} min")
+
+        # Lightning Lane / paid line
+        if entry.queue.PAID_RETURN_TIME:
+            prt = entry.queue.PAID_RETURN_TIME
+            price = prt.price.formatted if prt.price else "?"
+            print(f"{entry.name}: Lightning Lane {price}, return {prt.returnStart} → {prt.returnEnd}")
+
+        # Boarding group
+        if entry.queue.BOARDING_GROUP:
+            bg = entry.queue.BOARDING_GROUP
+            print(
+                f"{entry.name}: boarding group {bg.currentGroupStart}–{bg.currentGroupEnd}, "
+                f"~{bg.estimatedWait} min wait, status {bg.allocationStatus}"
+            )
+
+        # Return-time only (no paid component)
+        if entry.queue.RETURN_TIME:
+            rt = entry.queue.RETURN_TIME
+            print(f"{entry.name}: virtual queue {rt.returnStart} → {rt.returnEnd} ({rt.state})")
+```
+
+#### Generic iteration
+
+If you'd rather not branch on every variant, `iter_queues(entry)` flattens
+all populated queue types into one sequence of dicts keyed by `type`:
 
 ```python
 from themeparks import ThemeParks, iter_queues
@@ -139,8 +191,16 @@ with ThemeParks() as tp:
     live = tp.entity("75ea578a-adc8-4116-a54d-dccb60765ef9").live()
     for entry in live.liveData or []:
         for q in iter_queues(entry):
-            print(entry.name, q["type"], q)
+            # q is a dict, e.g. {"type": "STANDBY", "waitTime": 35}
+            #                or {"type": "PAID_RETURN_TIME", "state": "AVAILABLE", ...}
+            print(entry.name, q)
 ```
+
+The `type` key matches the API's variant name (`STANDBY`, `SINGLE_RIDER`,
+`RETURN_TIME`, `PAID_RETURN_TIME`, `BOARDING_GROUP`, `PAID_STANDBY`). The
+remaining keys are whatever fields that variant carries.
+
+### Other helpers
 
 `parse_api_datetime(value, timezone)` parses any API date/time string into a
 timezone-aware `datetime`, honoring the entity's IANA timezone for naive

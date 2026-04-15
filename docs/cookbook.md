@@ -204,3 +204,86 @@ pass `cache=False` to force every call to hit the network:
 with ThemeParks(cache=False) as tp:
     ...
 ```
+
+## Recipe 5 — Read every queue variant, not just standby
+
+An attraction can expose more than one queue type at the same time — a
+classic Disney ride often has STANDBY plus PAID_RETURN_TIME (Lightning
+Lane) plus SINGLE_RIDER. The full set of variants is:
+
+| Variant            | Use case                                     |
+|--------------------|----------------------------------------------|
+| `STANDBY`          | Regular wait line                            |
+| `SINGLE_RIDER`     | Single-rider line wait                       |
+| `PAID_STANDBY`     | Paid express line wait                       |
+| `RETURN_TIME`      | Virtual queue (free)                         |
+| `PAID_RETURN_TIME` | Lightning Lane / paid return time + price    |
+| `BOARDING_GROUP`   | Boarding-group rides (Rise of the Resistance, TRON) |
+
+Print all populated queue variants for every attraction at Magic Kingdom:
+
+```python
+from themeparks import ThemeParks
+
+MAGIC_KINGDOM = "75ea578a-adc8-4116-a54d-dccb60765ef9"
+
+with ThemeParks() as tp:
+    live = tp.entity(MAGIC_KINGDOM).live()
+
+for entry in live.liveData or []:
+    if entry.queue is None:
+        continue
+
+    if entry.queue.STANDBY and entry.queue.STANDBY.waitTime is not None:
+        print(f"{entry.name:40s}  STANDBY        {entry.queue.STANDBY.waitTime} min")
+
+    if entry.queue.SINGLE_RIDER and entry.queue.SINGLE_RIDER.waitTime is not None:
+        print(f"{entry.name:40s}  SINGLE_RIDER   {entry.queue.SINGLE_RIDER.waitTime} min")
+
+    if entry.queue.PAID_RETURN_TIME:
+        prt = entry.queue.PAID_RETURN_TIME
+        price = prt.price.formatted if prt.price else "?"
+        print(f"{entry.name:40s}  LIGHTNING LANE {price}, return {prt.returnStart} → {prt.returnEnd}")
+
+    if entry.queue.RETURN_TIME:
+        rt = entry.queue.RETURN_TIME
+        print(f"{entry.name:40s}  VIRTUAL QUEUE  {rt.returnStart} → {rt.returnEnd} ({rt.state})")
+
+    if entry.queue.BOARDING_GROUP:
+        bg = entry.queue.BOARDING_GROUP
+        print(
+            f"{entry.name:40s}  BOARDING GROUP {bg.currentGroupStart}–{bg.currentGroupEnd}, "
+            f"~{bg.estimatedWait} min, status {bg.allocationStatus}"
+        )
+
+    if entry.queue.PAID_STANDBY and entry.queue.PAID_STANDBY.waitTime is not None:
+        print(f"{entry.name:40s}  PAID_STANDBY   {entry.queue.PAID_STANDBY.waitTime} min")
+```
+
+Sample output:
+
+```
+Big Thunder Mountain Railroad             STANDBY        45 min
+Big Thunder Mountain Railroad             LIGHTNING LANE $15.00, return 2026-04-15T14:30:00-04:00 → 2026-04-15T15:30:00-04:00
+Pirates of the Caribbean                  STANDBY        20 min
+TRON Lightcycle / Run                     BOARDING GROUP 38–41, ~25 min, status AVAILABLE
+TRON Lightcycle / Run                     LIGHTNING LANE $20.00, return 2026-04-15T15:00:00-04:00 → 2026-04-15T16:00:00-04:00
+...
+```
+
+### Generic alternative
+
+If branching on every variant is too verbose, `iter_queues(entry)` flattens
+all populated variants into one sequence of dicts:
+
+```python
+from themeparks import ThemeParks, iter_queues
+
+with ThemeParks() as tp:
+    live = tp.entity(MAGIC_KINGDOM).live()
+    for entry in live.liveData or []:
+        for q in iter_queues(entry):
+            # q is e.g. {"type": "STANDBY", "waitTime": 45}
+            #         or {"type": "PAID_RETURN_TIME", "state": "AVAILABLE", "price": {...}, ...}
+            print(entry.name, q["type"], q)
+```
