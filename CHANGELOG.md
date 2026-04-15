@@ -1,5 +1,10 @@
 # Changelog
 
+## [2.0.0] - 2026-04-15
+First stable v2 release. Identical surface to `2.0.0a1` after a brief alpha
+soak; no code changes since `2.0.0a1`. Bumped `Development Status` classifier
+to `Production/Stable`.
+
 ## [2.0.0a1] - 2026-04-15
 ### Added
 - MkDocs Material documentation site with full API reference and a cookbook

@@ -13,7 +13,7 @@ from themeparks._raw import AsyncRawClient, RawClient
 from themeparks._transport import AsyncTransport, RetryConfig, SyncTransport
 
 DEFAULT_BASE_URL = "https://api.themeparks.wiki/v1"
-PACKAGE_VERSION = "2.0.0a1"
+PACKAGE_VERSION = "2.0.0"
 
 
 def _default_user_agent() -> str:
