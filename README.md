@@ -14,45 +14,72 @@ pip install themeparks
 
 Python 3.9+ is required.
 
-## Quickstart (sync)
+## Print live wait times (sync)
 
 ```python
-from themeparks import ThemeParks
+from themeparks import ThemeParks, current_wait_time
 
-# Magic Kingdom (Walt Disney World)
 MAGIC_KINGDOM = "75ea578a-adc8-4116-a54d-dccb60765ef9"
 
 with ThemeParks() as tp:
-    park = tp.entity(MAGIC_KINGDOM).get()
-    print(park.name, park.entityType)
-
     live = tp.entity(MAGIC_KINGDOM).live()
-    for item in live.liveData or []:
-        standby = item.queue.STANDBY if item.queue else None
-        wait = standby.waitTime if standby else None
-        print(f"{item.name:40s}  {wait} min" if wait is not None else f"{item.name:40s}  (closed)")
+    for entry in sorted(live.liveData or [], key=lambda e: e.name):
+        wait = current_wait_time(entry)
+        if wait is None:
+            print(f"{entry.name:50s}  --")
+        else:
+            print(f"{entry.name:50s}  {wait:>3d} min")
 ```
 
-## Quickstart (async)
+Sample output:
+
+```
+Astro Orbiter                                       15 min
+Big Thunder Mountain Railroad                       45 min
+Buzz Lightyear's Space Ranger Spin                  20 min
+...
+```
+
+## Print live wait times (async)
 
 ```python
 import asyncio
-from themeparks import AsyncThemeParks
+from themeparks import AsyncThemeParks, current_wait_time
 
 MAGIC_KINGDOM = "75ea578a-adc8-4116-a54d-dccb60765ef9"
 
-async def main():
+async def main() -> None:
     async with AsyncThemeParks() as tp:
-        park = await tp.entity(MAGIC_KINGDOM).get()
-        print(park.name)
-
         live = await tp.entity(MAGIC_KINGDOM).live()
-        print(f"{len(live.liveData or [])} live items")
+        for entry in sorted(live.liveData or [], key=lambda e: e.name):
+            wait = current_wait_time(entry)
+            if wait is None:
+                print(f"{entry.name:50s}  --")
+            else:
+                print(f"{entry.name:50s}  {wait:>3d} min")
 
 asyncio.run(main())
 ```
 
-The async client mirrors the sync surface. Only the call sites need `await`.
+The sync and async clients mirror each other method-for-method. Only the
+call sites need `await` and you use `async with` instead of `with`.
+
+### Just the open rides, sorted longest-wait first
+
+```python
+from themeparks import ThemeParks, current_wait_time
+
+with ThemeParks() as tp:
+    live = tp.entity("75ea578a-adc8-4116-a54d-dccb60765ef9").live()
+    waits = [
+        (entry.name, current_wait_time(entry))
+        for entry in live.liveData or []
+    ]
+    waits = [(name, w) for name, w in waits if w is not None]
+    waits.sort(key=lambda pair: pair[1], reverse=True)
+    for name, wait in waits:
+        print(f"{wait:>3d} min  {name}")
+```
 
 ## Client options
 
@@ -99,21 +126,25 @@ with ThemeParks() as tp:
     print(f"{len(entries)} schedule entries")
 ```
 
-### Live data helpers
+### More live-data helpers
 
-`current_wait_time`, `iter_queues`, and `parse_api_datetime` are exported at
-the package root for direct use:
+`current_wait_time` covers the standby-queue case. For attractions that use
+return times, boarding groups, or paid lines, iterate every queue variant on
+an entry with `iter_queues`:
 
 ```python
-from themeparks import ThemeParks, current_wait_time, iter_queues
+from themeparks import ThemeParks, iter_queues
 
 with ThemeParks() as tp:
     live = tp.entity("75ea578a-adc8-4116-a54d-dccb60765ef9").live()
     for entry in live.liveData or []:
-        wait = current_wait_time(entry)
-        if wait is not None:
-            print(f"{entry.name}: {wait} min")
+        for q in iter_queues(entry):
+            print(entry.name, q["type"], q)
 ```
+
+`parse_api_datetime(value, timezone)` parses any API date/time string into a
+timezone-aware `datetime`, honoring the entity's IANA timezone for naive
+inputs.
 
 ## Low-level escape hatch
 
