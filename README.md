@@ -99,6 +99,22 @@ with ThemeParks() as tp:
     print(f"{len(entries)} schedule entries")
 ```
 
+### Live data helpers
+
+`current_wait_time`, `iter_queues`, and `parse_api_datetime` are exported at
+the package root for direct use:
+
+```python
+from themeparks import ThemeParks, current_wait_time, iter_queues
+
+with ThemeParks() as tp:
+    live = tp.entity("75ea578a-adc8-4116-a54d-dccb60765ef9").live()
+    for entry in live.liveData or []:
+        wait = current_wait_time(entry)
+        if wait is not None:
+            print(f"{entry.name}: {wait} min")
+```
+
 ## Low-level escape hatch
 
 Every ergonomic helper is built on top of `tp.raw`, which is a thin, typed
