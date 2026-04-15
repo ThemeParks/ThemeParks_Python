@@ -187,6 +187,38 @@ with ThemeParks() as tp:
 `RateLimitError` is a subclass of `APIError`, so the order of the `except`
 blocks matters if you want to handle 429 specially.
 
+## Debugging — see every HTTP request
+
+The SDK is built on `httpx`, which has a built-in logger. Turn it on to see
+every outbound request and response status:
+
+```python
+import logging
+logging.basicConfig(level=logging.INFO)
+logging.getLogger("httpx").setLevel(logging.DEBUG)
+
+from themeparks import ThemeParks
+with ThemeParks() as tp:
+    tp.entity("75ea578a-adc8-4116-a54d-dccb60765ef9").live()
+```
+
+Output:
+
+```
+INFO httpx HTTP Request: GET https://api.themeparks.wiki/v1/entity/75ea578a-adc8-4116-a54d-dccb60765ef9/live "HTTP/1.1 200 OK"
+```
+
+For raw byte-level traces (TLS handshake, header bytes, etc.), also enable
+the `httpcore` logger:
+
+```python
+logging.getLogger("httpcore").setLevel(logging.DEBUG)
+```
+
+> **Note:** requests served from the in-memory cache do **not** appear in
+> `httpx` logs — they're returned before the transport is touched. To see
+> every call as a network round-trip while debugging, pass `cache=False`.
+
 ## Caching
 
 The default client caches `GET` responses in-memory with sensible per-endpoint

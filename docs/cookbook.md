@@ -159,3 +159,44 @@ async def main() -> None:
 
 asyncio.run(main())
 ```
+
+## Recipe 4 — See every HTTP request the SDK makes
+
+The SDK is built on `httpx`, which has a built-in logger. Enable it before
+constructing the client to see every outbound request and response status
+in real time:
+
+```python
+import logging
+logging.basicConfig(level=logging.INFO)
+logging.getLogger("httpx").setLevel(logging.DEBUG)
+
+from themeparks import ThemeParks
+
+with ThemeParks() as tp:
+    tp.destinations.list()
+    tp.entity("75ea578a-adc8-4116-a54d-dccb60765ef9").live()
+```
+
+Output:
+
+```
+INFO httpx HTTP Request: GET https://api.themeparks.wiki/v1/destinations "HTTP/1.1 200 OK"
+INFO httpx HTTP Request: GET https://api.themeparks.wiki/v1/entity/75ea578a-adc8-4116-a54d-dccb60765ef9/live "HTTP/1.1 200 OK"
+```
+
+For raw byte-level traces (TLS handshake, header bytes, retries, connection
+reuse) also enable the `httpcore` logger:
+
+```python
+logging.getLogger("httpcore").setLevel(logging.DEBUG)
+```
+
+Tip: requests served from the in-memory cache do **not** appear in `httpx`
+logs — they are returned before the transport is touched. While debugging,
+pass `cache=False` to force every call to hit the network:
+
+```python
+with ThemeParks(cache=False) as tp:
+    ...
+```
