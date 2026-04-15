@@ -22,6 +22,15 @@ def _path_entity(entity_id: str) -> str:
 
 
 class RawClient:
+    """Thin, 1:1 synchronous wrapper over the ThemeParks OpenAPI operations.
+
+    Each method maps to a single HTTP GET and returns a validated pydantic
+    model from :mod:`themeparks._generated.models`. No convenience logic
+    lives here: this is the layer that ergonomic helpers build on, and the
+    same layer users can reach directly via ``tp.raw`` when they need the
+    untransformed response shape.
+    """
+
     def __init__(self, *, transport: SyncTransport) -> None:
         self._t = transport
 
@@ -53,6 +62,13 @@ class RawClient:
 
 
 class AsyncRawClient:
+    """Asynchronous mirror of :class:`RawClient`.
+
+    Same 1:1 mapping onto the OpenAPI operations, but every method is a
+    coroutine. Returned pydantic models are identical to the sync client.
+    Reachable as ``tp.raw`` on :class:`~themeparks.AsyncThemeParks`.
+    """
+
     def __init__(self, *, transport: AsyncTransport) -> None:
         self._t = transport
 

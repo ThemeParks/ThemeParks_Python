@@ -31,6 +31,14 @@ def _matches(destination: DestinationEntry, needle: str) -> bool:
 
 
 class DestinationsApi:
+    """Directory helpers over the top-level ``/destinations`` endpoint.
+
+    Obtained via ``tp.destinations``. :meth:`list` returns the raw
+    :class:`~themeparks._generated.models.DestinationsResponse`; :meth:`find`
+    performs a forgiving substring lookup on slug and name so end-users can
+    type ``"Walt Disney World"`` and still get a match.
+    """
+
     def __init__(self, *, raw: RawClient) -> None:
         self._raw = raw
 
@@ -38,6 +46,18 @@ class DestinationsApi:
         return self._raw.get_destinations()
 
     def find(self, query: str) -> DestinationEntry | None:
+        """Return the first destination that loosely matches ``query``.
+
+        Matching is case-insensitive and punctuation-insensitive: both the
+        query and each candidate slug/name are normalized by lowercasing and
+        stripping non-alphanumeric characters before substring comparison. So
+        ``"Walt Disney World"``, ``"walt-disney-world"``, and
+        ``"waltdisneyworld"`` all resolve to the same destination.
+
+        The destinations list grows over time and entries can be renamed. If
+        you need a stable reference, resolve the id once with this helper and
+        pin that id in your code.
+        """
         needle = _normalize(query)
         if not needle:
             return None
@@ -48,6 +68,12 @@ class DestinationsApi:
 
 
 class AsyncDestinationsApi:
+    """Asynchronous mirror of :class:`DestinationsApi`.
+
+    Same :meth:`list` / :meth:`find` surface, but both are coroutines and must
+    be awaited. See :meth:`find` for the loose-match semantics.
+    """
+
     def __init__(self, *, raw: AsyncRawClient) -> None:
         self._raw = raw
 
@@ -55,6 +81,14 @@ class AsyncDestinationsApi:
         return await self._raw.get_destinations()
 
     async def find(self, query: str) -> DestinationEntry | None:
+        """Return the first destination that loosely matches ``query``.
+
+        Matching is case-insensitive and punctuation-insensitive: both the
+        query and each candidate slug/name are normalized by lowercasing and
+        stripping non-alphanumeric characters before substring comparison. So
+        ``"Walt Disney World"``, ``"walt-disney-world"``, and
+        ``"waltdisneyworld"`` all resolve to the same destination.
+        """
         needle = _normalize(query)
         if not needle:
             return None

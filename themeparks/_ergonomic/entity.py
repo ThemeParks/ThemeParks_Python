@@ -56,6 +56,22 @@ class _ScheduleApi:
 
 
 class EntityHandle:
+    """Fluent, read-only navigation rooted at one entity id.
+
+    Obtained via ``tp.entity(entity_id)``. Provides :meth:`get` for the entity
+    record, :meth:`children` for direct children, :meth:`live` for current
+    wait/queue data, :meth:`walk` for a lazy BFS over all descendants, and
+    ``.schedule`` for ``upcoming`` / ``month`` / ``range`` helpers. All calls
+    flow through the shared :class:`~themeparks._raw.RawClient` and therefore
+    share the client's cache.
+
+    Example:
+        >>> with ThemeParks() as tp:
+        ...     mk = tp.entity("75ea578a-adc8-4116-a54d-dccb60765ef9")
+        ...     live = mk.live()
+
+    """
+
     def __init__(self, *, raw: RawClient, entity_id: str) -> None:
         self._raw = raw
         self.entity_id = entity_id
@@ -112,6 +128,21 @@ class _AsyncScheduleApi:
 
 
 class AsyncEntityHandle:
+    """Asynchronous mirror of :class:`EntityHandle`.
+
+    Same method set (``get``, ``children``, ``live``, ``walk``, ``schedule``)
+    but all network-bound methods are coroutines. :meth:`walk` is an async
+    iterator that fetches each BFS level concurrently (bounded by a
+    ``concurrency`` parameter), and ``schedule.range`` fans out month fetches
+    via ``asyncio.gather``.
+
+    Example:
+        >>> async with AsyncThemeParks() as tp:
+        ...     async for child in tp.entity(root_id).walk():
+        ...         ...
+
+    """
+
     def __init__(self, *, raw: AsyncRawClient, entity_id: str) -> None:
         self._raw = raw
         self.entity_id = entity_id

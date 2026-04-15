@@ -40,6 +40,22 @@ def ttl_for_path(path: str) -> float:
 
 @runtime_checkable
 class Cache(Protocol):
+    """Interface for pluggable cache backends.
+
+    Any object implementing this protocol can be passed to
+    :class:`~themeparks.ThemeParks` or :class:`~themeparks.AsyncThemeParks`
+    as the ``cache=`` argument. The contract is intentionally small:
+
+    - ``get(key)`` returns the cached value, or ``None`` on miss or expiry.
+    - ``set(key, value, ttl_seconds)`` stores ``value`` under ``key`` with a
+      TTL expressed in seconds; implementations are free to ignore or clamp
+      non-positive TTLs.
+    - ``delete(key)`` evicts an entry; a missing key must not raise.
+
+    The SDK itself does not call ``set`` for paths whose TTL is 0 (see
+    :func:`ttl_for_path`), so backends rarely need special-case logic.
+    """
+
     def get(self, key: str) -> Any | None: ...
     def set(self, key: str, value: Any, ttl_seconds: float) -> None: ...
     def delete(self, key: str) -> None: ...

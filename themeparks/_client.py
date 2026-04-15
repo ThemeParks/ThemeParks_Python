@@ -65,6 +65,21 @@ class _CachingAsyncTransport:
 
 
 class ThemeParks:
+    """Synchronous top-level client for the ThemeParks.wiki API.
+
+    Wraps an ``httpx.Client`` with retries and an in-memory LRU cache that is
+    on by default (per-endpoint TTLs live in :mod:`themeparks._cache`). Exposes
+    both a raw surface (``tp.raw``) of 1:1 OpenAPI operations and an ergonomic
+    surface (``tp.destinations``, ``tp.entity(id)``) that returns pydantic
+    models. Use as a context manager so the underlying HTTP client is closed.
+
+    Example:
+        >>> from themeparks import ThemeParks
+        >>> with ThemeParks() as tp:
+        ...     dests = tp.destinations.list()
+
+    """
+
     def __init__(  # noqa: PLR0913
         self,
         *,
@@ -105,6 +120,20 @@ class ThemeParks:
 
 
 class AsyncThemeParks:
+    """Asynchronous mirror of :class:`ThemeParks`.
+
+    Backed by ``httpx.AsyncClient`` with the same retry, caching, and dual raw
+    + ergonomic surfaces as the sync client. Enter with ``async with`` so the
+    underlying client is closed cleanly. All ergonomic methods that hit the
+    network are coroutines.
+
+    Example:
+        >>> from themeparks import AsyncThemeParks
+        >>> async with AsyncThemeParks() as tp:
+        ...     dests = await tp.destinations.list()
+
+    """
+
     def __init__(  # noqa: PLR0913
         self,
         *,
