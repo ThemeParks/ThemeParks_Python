@@ -1,0 +1,39 @@
+name: Spec drift
+on:
+  schedule:
+    - cron: '23 6 * * *'
+  workflow_dispatch:
+jobs:
+  regenerate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -e '.[dev]'
+      - run: python scripts/regenerate.py
+      - name: Run live smoke tests
+        id: smoke
+        continue-on-error: true
+        run: pytest tests/live -v
+      - name: Open PR if models changed
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: bot/spec-drift
+          commit-message: "chore: regenerate models from upstream spec"
+          title: "Spec drift: regenerate models"
+          body: "Automated regeneration from https://api.themeparks.wiki/docs/v1.yaml"
+          add-paths: |
+            themeparks/_generated/models.py
+      - name: Open issue if smoke tests failed
+        if: steps.smoke.outcome == 'failure'
+        uses: JasonEtco/create-an-issue@v2
+        env:
+          GITHUB_TOKEN: '${{ secrets.GITHUB_TOKEN }}'
+        with:
+          filename: .github/SMOKE_FAILURE.md

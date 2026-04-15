@@ -1,0 +1,69 @@
+site_name: themeparks
+site_description: Modern Python SDK for the ThemeParks.wiki API
+site_url: https://themeparks.github.io/ThemeParks_Python/
+repo_url: https://github.com/ThemeParks/ThemeParks_Python
+repo_name: ThemeParks/ThemeParks_Python
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - navigation.tracking
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      toggle: { icon: material/weather-night, name: Switch to dark mode }
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      toggle: { icon: material/weather-sunny, name: Switch to light mode }
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            show_source: false
+            show_signature_annotations: true
+            separate_signature: true
+            docstring_style: google
+            members_order: source
+            merge_init_into_class: true
+            show_if_no_docstring: false
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - toc:
+      permalink: true
+  - tables
+
+nav:
+  - Home: index.md
+  - Quickstart: quickstart.md
+  - Cookbook: cookbook.md
+  - API reference:
+    - Client: api/client.md
+    - Entity: api/entity.md
+    - Destinations: api/destinations.md
+    - Raw client: api/raw.md
+    - Helpers: api/helpers.md
+    - Errors: api/errors.md
+    - Cache: api/cache.md
+    - Transport: api/transport.md
+    - Models: api/models.md
+  - Testing locally: cli-testing-locally.md
+  - Contributing: contributing.md
