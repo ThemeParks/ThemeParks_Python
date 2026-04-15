@@ -22,7 +22,7 @@ jobs:
         continue-on-error: true
         run: pytest tests/live -v
       - name: Open PR if models changed
-        uses: peter-evans/create-pull-request@v6
+        uses: peter-evans/create-pull-request@v8
         with:
           branch: bot/spec-drift
           commit-message: "chore: regenerate models from upstream spec"
