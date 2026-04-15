@@ -166,7 +166,5 @@ def test_parse_body_non_json_returns_text():
 
 def test_parse_body_malformed_json_returns_none():
 
-    r = httpx.Response(
-        200, content=b"{not json", headers={"content-type": "application/json"}
-    )
+    r = httpx.Response(200, content=b"{not json", headers={"content-type": "application/json"})
     assert _parse_body(r) is None

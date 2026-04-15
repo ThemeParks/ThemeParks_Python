@@ -1,4 +1,5 @@
 """Low-level 1:1 wrappers over the ThemeParks OpenAPI operations."""
+
 from __future__ import annotations
 
 from typing import Union
@@ -36,9 +37,7 @@ class RawClient:
         )
 
     def get_entity_live(self, entity_id: str) -> EntityLiveDataResponse:
-        return EntityLiveDataResponse.model_validate(
-            self._t.get(_path_entity(entity_id) + "/live")
-        )
+        return EntityLiveDataResponse.model_validate(self._t.get(_path_entity(entity_id) + "/live"))
 
     def get_entity_schedule(self, entity_id: str) -> EntityScheduleResponse:
         return EntityScheduleResponse.model_validate(

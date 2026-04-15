@@ -71,9 +71,7 @@ async def test_async_walk_bfs_and_dedupes():
         },
         {"id": "c", "children": []},
     ]
-    tp = AsyncThemeParks(
-        transport=httpx.MockTransport(sequential_handler(responses)), cache=False
-    )
+    tp = AsyncThemeParks(transport=httpx.MockTransport(sequential_handler(responses)), cache=False)
     ids = [c.id async for c in tp.entity("root").walk()]
     assert ids == ["a", "b", "c"]
 
@@ -83,9 +81,7 @@ async def test_async_schedule_month():
         transport=httpx.MockTransport(
             by_path(
                 {
-                    "/v1/entity/abc/schedule/2026/4": {
-                        "schedule": [_entry("2026-04-01")]
-                    },
+                    "/v1/entity/abc/schedule/2026/4": {"schedule": [_entry("2026-04-01")]},
                 }
             )
         ),
@@ -100,23 +96,15 @@ async def test_async_schedule_range_fanout_and_sort():
         transport=httpx.MockTransport(
             by_path(
                 {
-                    "/v1/entity/abc/schedule/2026/3": {
-                        "schedule": [_entry("2026-03-31")]
-                    },
-                    "/v1/entity/abc/schedule/2026/4": {
-                        "schedule": [_entry("2026-04-15")]
-                    },
-                    "/v1/entity/abc/schedule/2026/5": {
-                        "schedule": [_entry("2026-05-01")]
-                    },
+                    "/v1/entity/abc/schedule/2026/3": {"schedule": [_entry("2026-03-31")]},
+                    "/v1/entity/abc/schedule/2026/4": {"schedule": [_entry("2026-04-15")]},
+                    "/v1/entity/abc/schedule/2026/5": {"schedule": [_entry("2026-05-01")]},
                 }
             )
         ),
         cache=False,
     )
-    entries = await tp.entity("abc").schedule.range(
-        date(2026, 3, 20), date(2026, 5, 10)
-    )
+    entries = await tp.entity("abc").schedule.range(date(2026, 3, 20), date(2026, 5, 10))
     assert [e.date for e in entries] == ["2026-03-31", "2026-04-15", "2026-05-01"]
 
 
@@ -165,13 +153,9 @@ async def test_async_walk_fetches_concurrently():
                 },
             )
         # Leaves: empty children list
-        return httpx.Response(
-            200, json={"id": path.rsplit("/", 2)[1], "children": []}
-        )
+        return httpx.Response(200, json={"id": path.rsplit("/", 2)[1], "children": []})
 
-    tp = AsyncThemeParks(
-        transport=httpx.MockTransport(handler_inner), cache=False
-    )
+    tp = AsyncThemeParks(transport=httpx.MockTransport(handler_inner), cache=False)
     start = time.monotonic()
     ids = [c.id async for c in tp.entity("root").walk()]
     elapsed = time.monotonic() - start
@@ -216,13 +200,9 @@ async def test_async_walk_respects_concurrency_cap():
                     ],
                 },
             )
-        return httpx.Response(
-            200, json={"id": path.rsplit("/", 2)[1], "children": []}
-        )
+        return httpx.Response(200, json={"id": path.rsplit("/", 2)[1], "children": []})
 
-    tp = AsyncThemeParks(
-        transport=httpx.MockTransport(handler_inner), cache=False
-    )
+    tp = AsyncThemeParks(transport=httpx.MockTransport(handler_inner), cache=False)
     ids = [c.id async for c in tp.entity("root").walk(concurrency=2)]
     assert len(ids) == 10
     assert peak_in_flight <= 2

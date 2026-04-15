@@ -1,4 +1,5 @@
 """Tests for the async low-level raw client."""
+
 from __future__ import annotations
 
 import json
@@ -24,9 +25,7 @@ def make_async_raw(body) -> AsyncRawClient:
     def handler(req: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json=body)
 
-    client = httpx.AsyncClient(
-        transport=httpx.MockTransport(handler), base_url="https://x/v1"
-    )
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="https://x/v1")
     t = AsyncTransport(
         client=client,
         base_url="https://x/v1",
@@ -56,9 +55,7 @@ async def test_async_get_entity_schedule_month():
         captured["url"] = req.url.path
         return httpx.Response(200, json={"schedule": []})
 
-    client = httpx.AsyncClient(
-        transport=httpx.MockTransport(handler), base_url="https://x/v1"
-    )
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="https://x/v1")
     t = AsyncTransport(
         client=client,
         base_url="https://x/v1",

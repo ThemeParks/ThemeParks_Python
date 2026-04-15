@@ -48,9 +48,7 @@ def test_walk_bfs_and_dedupes():
         },
         {"id": "c", "children": []},
     ]
-    tp = ThemeParks(
-        transport=httpx.MockTransport(sequential_handler(responses)), cache=False
-    )
+    tp = ThemeParks(transport=httpx.MockTransport(sequential_handler(responses)), cache=False)
     ids = [c.id for c in tp.entity("root").walk()]
     assert ids == ["a", "b", "c"]
 

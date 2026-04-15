@@ -1,4 +1,5 @@
 """Helpers for narrowing live queue data."""
+
 from __future__ import annotations
 
 from collections.abc import Iterator

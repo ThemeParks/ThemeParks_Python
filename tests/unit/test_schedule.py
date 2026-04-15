@@ -29,9 +29,7 @@ def test_schedule_month():
         transport=httpx.MockTransport(
             by_path(
                 {
-                    "/v1/entity/abc/schedule/2026/4": {
-                        "schedule": [_entry("2026-04-01")]
-                    },
+                    "/v1/entity/abc/schedule/2026/4": {"schedule": [_entry("2026-04-01")]},
                 }
             )
         ),
@@ -46,15 +44,9 @@ def test_schedule_range_fanout_and_sort():
         transport=httpx.MockTransport(
             by_path(
                 {
-                    "/v1/entity/abc/schedule/2026/3": {
-                        "schedule": [_entry("2026-03-31")]
-                    },
-                    "/v1/entity/abc/schedule/2026/4": {
-                        "schedule": [_entry("2026-04-15")]
-                    },
-                    "/v1/entity/abc/schedule/2026/5": {
-                        "schedule": [_entry("2026-05-01")]
-                    },
+                    "/v1/entity/abc/schedule/2026/3": {"schedule": [_entry("2026-03-31")]},
+                    "/v1/entity/abc/schedule/2026/4": {"schedule": [_entry("2026-04-15")]},
+                    "/v1/entity/abc/schedule/2026/5": {"schedule": [_entry("2026-05-01")]},
                 }
             )
         ),
@@ -77,12 +69,8 @@ def test_schedule_range_crosses_year_boundary():
         transport=httpx.MockTransport(
             by_path(
                 {
-                    "/v1/entity/abc/schedule/2026/12": {
-                        "schedule": [_entry("2026-12-31")]
-                    },
-                    "/v1/entity/abc/schedule/2027/1": {
-                        "schedule": [_entry("2027-01-02")]
-                    },
+                    "/v1/entity/abc/schedule/2026/12": {"schedule": [_entry("2026-12-31")]},
+                    "/v1/entity/abc/schedule/2027/1": {"schedule": [_entry("2027-01-02")]},
                 }
             )
         ),

@@ -4,6 +4,7 @@ Includes a post-generation patch step to relax queue fields that the OpenAPI
 spec marks ``nullable: true`` but which ``datamodel-code-generator`` leaves as
 required non-Optional. See the plan entry for Task 7 and GitHub issues #1/#2.
 """
+
 from __future__ import annotations
 
 import re

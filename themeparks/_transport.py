@@ -1,4 +1,5 @@
 """Sync and async HTTP transport for the ThemeParks SDK."""
+
 from __future__ import annotations
 
 import asyncio
@@ -40,7 +41,7 @@ def _parse_retry_after(raw: str | None) -> float | None:
 
 
 def _backoff(attempt: int) -> float:
-    base = 0.25 * (2 ** attempt)
+    base = 0.25 * (2**attempt)
     jittered: float = base + random.random() * base * 0.25
     return min(jittered, 5.0)
 
@@ -159,9 +160,7 @@ class AsyncTransport:
         self._base_url = base_url.rstrip("/")
         self._user_agent = user_agent
         self._retry = retry
-        self._sleep: Callable[..., Awaitable[None]] = (
-            sleep if sleep is not None else asyncio.sleep
-        )
+        self._sleep: Callable[..., Awaitable[None]] = sleep if sleep is not None else asyncio.sleep
 
     async def get(self, path: str) -> Any:
         url = self._base_url + path

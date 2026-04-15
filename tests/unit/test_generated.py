@@ -3,6 +3,7 @@
 If datamodel-codegen output ever drifts and silently breaks the post-gen
 patches, these assertions fail loudly in CI.
 """
+
 from themeparks._generated.models import LiveQueue
 
 

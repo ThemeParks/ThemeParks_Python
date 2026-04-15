@@ -14,9 +14,7 @@ def _handler(counter, body):
 async def test_async_raw_works_through_context_manager():
     counter = {"n": 0}
     body = {"destinations": []}
-    async with AsyncThemeParks(
-        transport=httpx.MockTransport(_handler(counter, body))
-    ) as tp:
+    async with AsyncThemeParks(transport=httpx.MockTransport(_handler(counter, body))) as tp:
         res = await tp.raw.get_destinations()
         assert res.destinations == []
     assert counter["n"] == 1
@@ -43,9 +41,7 @@ async def test_async_cache_bypasses_live():
 async def test_async_cache_false_disables():
     counter = {"n": 0}
     body = {"destinations": []}
-    tp = AsyncThemeParks(
-        transport=httpx.MockTransport(_handler(counter, body)), cache=False
-    )
+    tp = AsyncThemeParks(transport=httpx.MockTransport(_handler(counter, body)), cache=False)
     await tp.raw.get_destinations()
     await tp.raw.get_destinations()
     assert counter["n"] == 2

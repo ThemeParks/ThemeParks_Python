@@ -24,9 +24,7 @@ def test_api_error_carries_status_body_url():
 
 
 def test_rate_limit_error_extends_api_error():
-    e = RateLimitError(
-        "rate limited", status=429, body=None, url="/x", retry_after=1.5
-    )
+    e = RateLimitError("rate limited", status=429, body=None, url="/x", retry_after=1.5)
     assert isinstance(e, APIError)
     assert e.retry_after == 1.5
 
@@ -50,9 +48,7 @@ def test_api_error_repr_includes_status_and_url():
 
 
 def test_rate_limit_error_repr_includes_retry_after():
-    e = RateLimitError(
-        "rate limited", status=429, body=None, url="/x", retry_after=5.0
-    )
+    e = RateLimitError("rate limited", status=429, body=None, url="/x", retry_after=5.0)
     assert repr(e) == "RateLimitError(status=429, url='/x', retry_after=5.0)"
 
 

@@ -8,6 +8,7 @@ def _handler(counter, body):
     def h(req):
         counter["n"] += 1
         return httpx.Response(200, json=body)
+
     return h
 
 

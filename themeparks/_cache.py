@@ -1,4 +1,5 @@
 """Cache protocol, in-memory LRU default, and per-endpoint TTL table."""
+
 from __future__ import annotations
 
 import re
@@ -11,6 +12,7 @@ from typing import Any, Protocol, runtime_checkable
 @dataclass
 class CacheConfig:
     max_entries: int = 500
+
 
 HOUR = 3600
 FIVE_MINUTES = 300

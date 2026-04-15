@@ -1,4 +1,5 @@
 """Tests for the low-level raw client."""
+
 from __future__ import annotations
 
 import json
@@ -20,9 +21,7 @@ def make_raw(body) -> RawClient:
     def handler(req: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json=body)
 
-    client = httpx.Client(
-        transport=httpx.MockTransport(handler), base_url="https://x/v1"
-    )
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://x/v1")
     t = SyncTransport(
         client=client,
         base_url="https://x/v1",
@@ -59,9 +58,7 @@ def test_get_entity_schedule_month_builds_correct_path():
         captured["url"] = req.url.path
         return httpx.Response(200, json={"schedule": []})
 
-    client = httpx.Client(
-        transport=httpx.MockTransport(handler), base_url="https://x/v1"
-    )
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://x/v1")
     t = SyncTransport(
         client=client,
         base_url="https://x/v1",

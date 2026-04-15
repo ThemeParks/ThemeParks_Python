@@ -1,4 +1,5 @@
 """Entity navigation helpers."""
+
 from __future__ import annotations
 
 import asyncio
@@ -141,9 +142,7 @@ class AsyncEntityHandle:
                 return await self._raw.get_entity_children(entity_id)
 
         while current_level:
-            responses = await asyncio.gather(
-                *(fetch_children(eid) for eid in current_level)
-            )
+            responses = await asyncio.gather(*(fetch_children(eid) for eid in current_level))
             next_level: list[str] = []
             for res in responses:
                 for child in res.children or []:

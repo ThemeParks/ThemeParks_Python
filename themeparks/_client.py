@@ -1,4 +1,5 @@
 """Sync and async top-level client classes."""
+
 from __future__ import annotations
 
 from typing import Any, Callable
@@ -74,9 +75,7 @@ class ThemeParks:
         cache: Cache | bool | CacheConfig | None = None,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
-        self._client = httpx.Client(
-            base_url=base_url, timeout=timeout, transport=transport
-        )
+        self._client = httpx.Client(base_url=base_url, timeout=timeout, transport=transport)
         sync_t = SyncTransport(
             client=self._client,
             base_url=base_url,
@@ -84,9 +83,7 @@ class ThemeParks:
             retry=retry or RetryConfig(),
         )
         cache_impl = _build_cache(cache)
-        inner: Any = (
-            _CachingSyncTransport(sync_t, cache_impl) if cache_impl else sync_t
-        )
+        inner: Any = _CachingSyncTransport(sync_t, cache_impl) if cache_impl else sync_t
         self.raw = RawClient(transport=inner)
 
         self._entity_ctor: Callable[[str], EntityHandle] = lambda eid: EntityHandle(
@@ -118,9 +115,7 @@ class AsyncThemeParks:
         cache: Cache | bool | CacheConfig | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
-        self._client = httpx.AsyncClient(
-            base_url=base_url, timeout=timeout, transport=transport
-        )
+        self._client = httpx.AsyncClient(base_url=base_url, timeout=timeout, transport=transport)
         async_t = AsyncTransport(
             client=self._client,
             base_url=base_url,
@@ -128,13 +123,11 @@ class AsyncThemeParks:
             retry=retry or RetryConfig(),
         )
         cache_impl = _build_cache(cache)
-        inner: Any = (
-            _CachingAsyncTransport(async_t, cache_impl) if cache_impl else async_t
-        )
+        inner: Any = _CachingAsyncTransport(async_t, cache_impl) if cache_impl else async_t
         self.raw = AsyncRawClient(transport=inner)
 
-        self._entity_ctor: Callable[[str], AsyncEntityHandle] = (
-            lambda eid: AsyncEntityHandle(raw=self.raw, entity_id=eid)
+        self._entity_ctor: Callable[[str], AsyncEntityHandle] = lambda eid: AsyncEntityHandle(
+            raw=self.raw, entity_id=eid
         )
         self.destinations = AsyncDestinationsApi(raw=self.raw)
 
