@@ -6,6 +6,8 @@ clients, default-on caching, and ergonomic helpers for the common workflows
 (list destinations, walk a park's children, fetch live wait times, pull a
 date-ranged schedule).
 
+📚 **[Full documentation, API reference, and cookbook](https://themeparks.github.io/ThemeParks_Python/)**
+
 ## Install
 
 ```bash
@@ -342,9 +344,12 @@ See [MIGRATION.md](./MIGRATION.md) for a side-by-side v1 to v2 guide.
 
 ## Links
 
-- API docs: https://api.themeparks.wiki
-- Issues: https://github.com/ThemeParks/ThemeParks_Python/issues
-- Changelog: [CHANGELOG.md](./CHANGELOG.md)
+- **SDK documentation:** https://themeparks.github.io/ThemeParks_Python/
+- **API reference:** https://themeparks.github.io/ThemeParks_Python/api/client/
+- **Cookbook:** https://themeparks.github.io/ThemeParks_Python/cookbook/
+- **Underlying API:** https://api.themeparks.wiki
+- **Issues:** https://github.com/ThemeParks/ThemeParks_Python/issues
+- **Changelog:** [CHANGELOG.md](./CHANGELOG.md)
 
 ## License
 
