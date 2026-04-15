@@ -33,6 +33,47 @@ def test_api_error_on_4xx():
         t.get("/entity/missing")
     assert ei.value.status == 404
     assert ei.value.body == {"err": "nope"}
+    # Message now includes status, reason, and a body excerpt.
+    msg = str(ei.value)
+    assert "404" in msg
+    assert "nope" in msg
+
+
+def test_api_error_message_includes_json_error_field():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, json={"error": "bad id"})
+
+    t = make_transport(handler)
+    with pytest.raises(APIError) as ei:
+        t.get("/x")
+    assert "bad id" in str(ei.value)
+
+
+def test_api_error_message_truncates_long_body():
+    long_body = "x" * 500
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            500, content=long_body.encode(), headers={"content-type": "text/plain"}
+        )
+
+    t = make_transport(handler, retry_max=0)
+    with pytest.raises(APIError) as ei:
+        t.get("/x")
+    msg = str(ei.value)
+    assert msg.endswith("...")
+    assert len(msg) < 500
+
+
+def test_api_error_message_omits_body_when_empty():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404)
+
+    t = make_transport(handler)
+    with pytest.raises(APIError) as ei:
+        t.get("/x")
+    # No trailing ": <body>" segment when body is absent.
+    assert ":" not in str(ei.value)
 
 
 def test_rate_limit_after_exhaustion():

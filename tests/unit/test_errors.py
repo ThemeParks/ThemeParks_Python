@@ -49,6 +49,13 @@ def test_api_error_repr_includes_status_and_url():
     assert repr(e) == "APIError(status=500, url='/x')"
 
 
-def test_rate_limit_error_repr_uses_subclass_name():
+def test_rate_limit_error_repr_includes_retry_after():
+    e = RateLimitError(
+        "rate limited", status=429, body=None, url="/x", retry_after=5.0
+    )
+    assert repr(e) == "RateLimitError(status=429, url='/x', retry_after=5.0)"
+
+
+def test_rate_limit_error_repr_handles_missing_retry_after():
     e = RateLimitError("rate limited", status=429, body=None, url="/x")
-    assert repr(e) == "RateLimitError(status=429, url='/x')"
+    assert repr(e) == "RateLimitError(status=429, url='/x', retry_after=None)"

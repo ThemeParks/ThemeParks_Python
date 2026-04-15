@@ -36,6 +36,12 @@ class RateLimitError(APIError):
         super().__init__(message, status=status, body=body, url=url)
         self.retry_after = retry_after
 
+    def __repr__(self) -> str:
+        return (
+            f"{type(self).__name__}(status={self.status}, url={self.url!r}, "
+            f"retry_after={self.retry_after})"
+        )
+
 
 class NetworkError(ThemeParksError):
     """Raised when the underlying transport fails."""

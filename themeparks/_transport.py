@@ -43,6 +43,24 @@ def _backoff(attempt: int) -> float:
     return min(jittered, 5.0)
 
 
+def _format_error_message(status: int, reason: str, body: Any) -> str:
+    """Build a human-useful error message from an HTTP response.
+
+    Includes a body excerpt when present so callers see *why* the request
+    failed without having to inspect ``exc.body`` manually. Dict bodies
+    with an ``"error"`` key are formatted specially; other bodies are
+    stringified and truncated to 200 characters.
+    """
+    if body is None or body == "":
+        return f"{status} {reason}"
+    if isinstance(body, dict) and "error" in body:
+        return f"{status} {reason}: {body['error']}"[:300]
+    body_str = str(body)
+    if len(body_str) > 200:
+        body_str = body_str[:200] + "..."
+    return f"{status} {reason}: {body_str}"
+
+
 def _parse_body(response: httpx.Response) -> Any:
     ct = response.headers.get("content-type", "")
     if "application/json" in ct:
@@ -107,7 +125,7 @@ class SyncTransport:
                 continue
             if status == _STATUS_TOO_MANY_REQUESTS:
                 raise RateLimitError(
-                    "429 Too Many Requests",
+                    _format_error_message(status, response.reason_phrase, body),
                     status=status,
                     body=body,
                     url=url,
@@ -118,7 +136,10 @@ class SyncTransport:
                 attempt += 1
                 continue
             raise APIError(
-                f"{status} {response.reason_phrase}", status=status, body=body, url=url
+                _format_error_message(status, response.reason_phrase, body),
+                status=status,
+                body=body,
+                url=url,
             )
 
 
@@ -175,7 +196,7 @@ class AsyncTransport:
                 continue
             if status == _STATUS_TOO_MANY_REQUESTS:
                 raise RateLimitError(
-                    "429 Too Many Requests",
+                    _format_error_message(status, response.reason_phrase, body),
                     status=status,
                     body=body,
                     url=url,
@@ -186,5 +207,8 @@ class AsyncTransport:
                 attempt += 1
                 continue
             raise APIError(
-                f"{status} {response.reason_phrase}", status=status, body=body, url=url
+                _format_error_message(status, response.reason_phrase, body),
+                status=status,
+                body=body,
+                url=url,
             )

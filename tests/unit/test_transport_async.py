@@ -37,6 +37,8 @@ async def test_async_api_error():
         await t.get("/entity/missing")
     assert ei.value.status == 404
     assert ei.value.body == {"err": "nope"}
+    msg = str(ei.value)
+    assert "404" in msg and "nope" in msg
 
 
 async def test_async_retries_5xx():
