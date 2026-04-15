@@ -81,7 +81,7 @@ async def test_async_schedule_month():
         transport=httpx.MockTransport(
             by_path(
                 {
-                    "/v1/entity/abc/schedule/2026/4": {"schedule": [_entry("2026-04-01")]},
+                    "/v1/entity/abc/schedule/2026/04": {"schedule": [_entry("2026-04-01")]},
                 }
             )
         ),
@@ -96,9 +96,9 @@ async def test_async_schedule_range_fanout_and_sort():
         transport=httpx.MockTransport(
             by_path(
                 {
-                    "/v1/entity/abc/schedule/2026/3": {"schedule": [_entry("2026-03-31")]},
-                    "/v1/entity/abc/schedule/2026/4": {"schedule": [_entry("2026-04-15")]},
-                    "/v1/entity/abc/schedule/2026/5": {"schedule": [_entry("2026-05-01")]},
+                    "/v1/entity/abc/schedule/2026/03": {"schedule": [_entry("2026-03-31")]},
+                    "/v1/entity/abc/schedule/2026/04": {"schedule": [_entry("2026-04-15")]},
+                    "/v1/entity/abc/schedule/2026/05": {"schedule": [_entry("2026-05-01")]},
                 }
             )
         ),

@@ -48,7 +48,7 @@ class RawClient:
         self, entity_id: str, year: int, month: int
     ) -> EntityScheduleResponse:
         return EntityScheduleResponse.model_validate(
-            self._t.get(_path_entity(entity_id) + f"/schedule/{year}/{month}")
+            self._t.get(_path_entity(entity_id) + f"/schedule/{year}/{month:02d}")
         )
 
 
@@ -81,5 +81,5 @@ class AsyncRawClient:
         self, entity_id: str, year: int, month: int
     ) -> EntityScheduleResponse:
         return EntityScheduleResponse.model_validate(
-            await self._t.get(_path_entity(entity_id) + f"/schedule/{year}/{month}")
+            await self._t.get(_path_entity(entity_id) + f"/schedule/{year}/{month:02d}")
         )

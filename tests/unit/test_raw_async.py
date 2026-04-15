@@ -64,7 +64,26 @@ async def test_async_get_entity_schedule_month():
         sleep=_noop_sleep,
     )
     await AsyncRawClient(transport=t).get_entity_schedule_month("abc", 2026, 4)
-    assert captured["url"].endswith("/entity/abc/schedule/2026/4")
+    assert captured["url"].endswith("/entity/abc/schedule/2026/04")
+
+
+async def test_async_get_entity_schedule_month_zero_pads_single_digit_month():
+    captured: dict[str, str] = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        captured["url"] = req.url.path
+        return httpx.Response(200, json={"schedule": []})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="https://x/v1")
+    t = AsyncTransport(
+        client=client,
+        base_url="https://x/v1",
+        user_agent="t/1",
+        retry=RetryConfig(max_retries=0),
+        sleep=_noop_sleep,
+    )
+    await AsyncRawClient(transport=t).get_entity_schedule_month("abc", 2026, 5)
+    assert captured["url"].endswith("/entity/abc/schedule/2026/05")
 
 
 async def test_async_get_entity():

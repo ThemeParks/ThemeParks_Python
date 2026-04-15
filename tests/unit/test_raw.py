@@ -68,4 +68,23 @@ def test_get_entity_schedule_month_builds_correct_path():
     )
     RawClient(transport=t).get_entity_schedule_month("abc", 2026, 4)
     # Path reflects httpx.Client(base_url=...) joining with the request path.
-    assert captured["url"].endswith("/entity/abc/schedule/2026/4")
+    assert captured["url"].endswith("/entity/abc/schedule/2026/04")
+
+
+def test_get_entity_schedule_month_zero_pads_single_digit_month():
+    captured: dict[str, str] = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        captured["url"] = req.url.path
+        return httpx.Response(200, json={"schedule": []})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://x/v1")
+    t = SyncTransport(
+        client=client,
+        base_url="https://x/v1",
+        user_agent="t/1",
+        retry=RetryConfig(max_retries=0),
+        sleep=lambda _: None,
+    )
+    RawClient(transport=t).get_entity_schedule_month("abc", 2026, 5)
+    assert captured["url"].endswith("/entity/abc/schedule/2026/05")
