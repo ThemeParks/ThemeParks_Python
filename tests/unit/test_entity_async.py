@@ -1,3 +1,5 @@
+import asyncio
+import time
 from datetime import date
 
 import httpx
@@ -124,6 +126,106 @@ async def test_async_schedule_range_empty_when_end_before_start():
         cache=False,
     )
     assert await tp.entity("abc").schedule.range(date(2026, 5, 1), date(2026, 3, 1)) == []
+
+
+async def test_async_walk_fetches_concurrently():
+    """Children at a single BFS level should be fetched in parallel.
+
+    Builds a tree with a root that has N children (all leaves). With sequential
+    fetching this takes N * delay; with parallel fetching it should take
+    roughly 1 * delay. We also count the peak number of concurrently in-flight
+    requests and assert it exceeded 1, which is immune to timing jitter.
+    """
+    delay = 0.05
+    n_children = 6
+    in_flight = 0
+    peak_in_flight = 0
+    lock = asyncio.Lock()
+
+    async def handler_inner(req: httpx.Request) -> httpx.Response:
+        nonlocal in_flight, peak_in_flight
+        async with lock:
+            in_flight += 1
+            peak_in_flight = max(peak_in_flight, in_flight)
+        try:
+            await asyncio.sleep(delay)
+        finally:
+            async with lock:
+                in_flight -= 1
+        path = req.url.path
+        if path.endswith("/root/children"):
+            return httpx.Response(
+                200,
+                json={
+                    "id": "root",
+                    "children": [
+                        {"id": f"c{i}", "name": f"C{i}", "entityType": "ATTRACTION"}
+                        for i in range(n_children)
+                    ],
+                },
+            )
+        # Leaves: empty children list
+        return httpx.Response(
+            200, json={"id": path.rsplit("/", 2)[1], "children": []}
+        )
+
+    tp = AsyncThemeParks(
+        transport=httpx.MockTransport(handler_inner), cache=False
+    )
+    start = time.monotonic()
+    ids = [c.id async for c in tp.entity("root").walk()]
+    elapsed = time.monotonic() - start
+
+    assert sorted(ids) == [f"c{i}" for i in range(n_children)]
+    # Parallelism indicator: at some point more than one fetch was in flight.
+    assert peak_in_flight > 1, f"expected >1 concurrent fetch, got {peak_in_flight}"
+    # Timing sanity: sequential would be >= (1 + n_children) * delay.
+    # Parallel (level 0 serial, level 1 parallel) should be ~2 * delay.
+    # Allow generous margin but still well under the sequential bound.
+    sequential_bound = (1 + n_children) * delay
+    assert elapsed < sequential_bound * 0.75, (
+        f"walk took {elapsed:.3f}s, expected well under {sequential_bound:.3f}s"
+    )
+
+
+async def test_async_walk_respects_concurrency_cap():
+    """The ``concurrency`` param should cap parallel in-flight fetches."""
+    in_flight = 0
+    peak_in_flight = 0
+    lock = asyncio.Lock()
+
+    async def handler_inner(req: httpx.Request) -> httpx.Response:
+        nonlocal in_flight, peak_in_flight
+        async with lock:
+            in_flight += 1
+            peak_in_flight = max(peak_in_flight, in_flight)
+        try:
+            await asyncio.sleep(0.02)
+        finally:
+            async with lock:
+                in_flight -= 1
+        path = req.url.path
+        if path.endswith("/root/children"):
+            return httpx.Response(
+                200,
+                json={
+                    "id": "root",
+                    "children": [
+                        {"id": f"c{i}", "name": f"C{i}", "entityType": "ATTRACTION"}
+                        for i in range(10)
+                    ],
+                },
+            )
+        return httpx.Response(
+            200, json={"id": path.rsplit("/", 2)[1], "children": []}
+        )
+
+    tp = AsyncThemeParks(
+        transport=httpx.MockTransport(handler_inner), cache=False
+    )
+    ids = [c.id async for c in tp.entity("root").walk(concurrency=2)]
+    assert len(ids) == 10
+    assert peak_in_flight <= 2
 
 
 async def test_async_entity_children_and_live():

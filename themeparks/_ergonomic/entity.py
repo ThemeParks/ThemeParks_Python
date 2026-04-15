@@ -125,15 +125,31 @@ class AsyncEntityHandle:
     async def live(self) -> EntityLiveDataResponse:
         return await self._raw.get_entity_live(self.entity_id)
 
-    async def walk(self) -> AsyncIterator[EntityChild]:
+    async def walk(self, *, concurrency: int = 8) -> AsyncIterator[EntityChild]:
+        """BFS over an entity's descendants with bounded parallelism.
+
+        Fetches all children within a BFS level concurrently (capped by
+        ``concurrency``) before advancing to the next level. Yields children
+        in BFS order and deduplicates by id.
+        """
         visited = {self.entity_id}
-        queue = [self.entity_id]
-        while queue:
-            current = queue.pop(0)
-            res = await self._raw.get_entity_children(current)
-            for child in res.children or []:
-                if child.id in visited:
-                    continue
-                visited.add(child.id)
-                queue.append(child.id)
-                yield child
+        current_level = [self.entity_id]
+        semaphore = asyncio.Semaphore(concurrency)
+
+        async def fetch_children(entity_id: str) -> EntityChildrenResponse:
+            async with semaphore:
+                return await self._raw.get_entity_children(entity_id)
+
+        while current_level:
+            responses = await asyncio.gather(
+                *(fetch_children(eid) for eid in current_level)
+            )
+            next_level: list[str] = []
+            for res in responses:
+                for child in res.children or []:
+                    if child.id in visited:
+                        continue
+                    visited.add(child.id)
+                    next_level.append(child.id)
+                    yield child
+            current_level = next_level
