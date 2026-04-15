@@ -63,12 +63,12 @@ def test_find_returns_first_on_multiple_matches():
     assert d is not None and d.id == "wdw"
 
 
-def test_find_no_match_still_returns_None():
+def test_find_no_match_still_returns_none():
     tp = _client()
     assert tp.destinations.find("nowhere") is None
 
 
-def test_find_empty_query_returns_None():
+def test_find_empty_query_returns_none():
     tp = _client()
     assert tp.destinations.find("   ") is None
 
@@ -102,6 +102,6 @@ async def test_async_find_returns_first_on_multiple_matches():
 
 
 @pytest.mark.asyncio
-async def test_async_find_no_match_still_returns_None():
+async def test_async_find_no_match_still_returns_none():
     tp = _async_client()
     assert await tp.destinations.find("nowhere") is None

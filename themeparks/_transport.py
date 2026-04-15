@@ -15,6 +15,8 @@ from themeparks._errors import APIError, NetworkError, RateLimitError, TimeoutEr
 
 _STATUS_TOO_MANY_REQUESTS = 429
 _STATUS_SERVER_ERROR = 500
+_ERROR_BODY_EXCERPT_LIMIT = 200
+_ERROR_MESSAGE_LIMIT = 300
 
 
 @dataclass
@@ -54,10 +56,10 @@ def _format_error_message(status: int, reason: str, body: Any) -> str:
     if body is None or body == "":
         return f"{status} {reason}"
     if isinstance(body, dict) and "error" in body:
-        return f"{status} {reason}: {body['error']}"[:300]
+        return f"{status} {reason}: {body['error']}"[:_ERROR_MESSAGE_LIMIT]
     body_str = str(body)
-    if len(body_str) > 200:
-        body_str = body_str[:200] + "..."
+    if len(body_str) > _ERROR_BODY_EXCERPT_LIMIT:
+        body_str = body_str[:_ERROR_BODY_EXCERPT_LIMIT] + "..."
     return f"{status} {reason}: {body_str}"
 
 
