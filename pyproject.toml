@@ -27,6 +27,7 @@ dependencies = [
   "httpx>=0.27",
   "pydantic>=2.6",
   "typing-extensions>=4.10",
+  "eval-type-backport>=0.2; python_version < '3.10'",
 ]
 
 [project.urls]
