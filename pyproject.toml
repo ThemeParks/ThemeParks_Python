@@ -44,6 +44,11 @@ dev = [
   "mypy>=1.10",
   "datamodel-code-generator[http]>=0.25",
 ]
+docs = [
+  "mkdocs>=1.5",
+  "mkdocs-material>=9.5",
+  "mkdocstrings[python]>=0.24",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["themeparks"]
