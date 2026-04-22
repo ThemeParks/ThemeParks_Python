@@ -161,6 +161,14 @@ def main() -> None:
     else:
         print("  no changes (already patched?)")
 
+    # Auto-format the generated file so `ruff format --check` in CI doesn't
+    # fail on quote-style or whitespace differences from datamodel-codegen.
+    print("Formatting generated models with ruff...")
+    subprocess.run(
+        [sys.executable, "-m", "ruff", "format", str(OUTPUT)],
+        check=True,
+    )
+
     # Post-generation sanity check. The running process already imported the
     # stale pre-patch module (if at all), so spawn a subprocess for a fresh
     # import that reflects what downstream users will see.

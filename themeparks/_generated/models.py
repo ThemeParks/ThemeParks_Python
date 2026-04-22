@@ -10,31 +10,31 @@ from pydantic import AwareDatetime, BaseModel, Field
 
 
 class EntityType(Enum):
-    DESTINATION = 'DESTINATION'
-    PARK = 'PARK'
-    ATTRACTION = 'ATTRACTION'
-    RESTAURANT = 'RESTAURANT'
-    HOTEL = 'HOTEL'
-    SHOW = 'SHOW'
+    DESTINATION = "DESTINATION"
+    PARK = "PARK"
+    ATTRACTION = "ATTRACTION"
+    RESTAURANT = "RESTAURANT"
+    HOTEL = "HOTEL"
+    SHOW = "SHOW"
 
 
 class LiveStatusType(Enum):
-    OPERATING = 'OPERATING'
-    DOWN = 'DOWN'
-    CLOSED = 'CLOSED'
-    REFURBISHMENT = 'REFURBISHMENT'
+    OPERATING = "OPERATING"
+    DOWN = "DOWN"
+    CLOSED = "CLOSED"
+    REFURBISHMENT = "REFURBISHMENT"
 
 
 class ReturnTimeState(Enum):
-    AVAILABLE = 'AVAILABLE'
-    TEMP_FULL = 'TEMP_FULL'
-    FINISHED = 'FINISHED'
+    AVAILABLE = "AVAILABLE"
+    TEMP_FULL = "TEMP_FULL"
+    FINISHED = "FINISHED"
 
 
 class BoardingGroupState(Enum):
-    AVAILABLE = 'AVAILABLE'
-    PAUSED = 'PAUSED'
-    CLOSED = 'CLOSED'
+    AVAILABLE = "AVAILABLE"
+    PAUSED = "PAUSED"
+    CLOSED = "CLOSED"
 
 
 class PriceData(BaseModel):
@@ -157,9 +157,9 @@ class EntityLiveDataResponse(BaseModel):
 
 
 class Type(Enum):
-    ADMISSION = 'ADMISSION'
-    PACKAGE = 'PACKAGE'
-    ATTRACTION = 'ATTRACTION'
+    ADMISSION = "ADMISSION"
+    PACKAGE = "PACKAGE"
+    ATTRACTION = "ATTRACTION"
 
 
 class SchedulePriceObject(BaseModel):
@@ -171,11 +171,11 @@ class SchedulePriceObject(BaseModel):
 
 
 class Type1(Enum):
-    OPERATING = 'OPERATING'
-    TICKETED_EVENT = 'TICKETED_EVENT'
-    PRIVATE_EVENT = 'PRIVATE_EVENT'
-    EXTRA_HOURS = 'EXTRA_HOURS'
-    INFO = 'INFO'
+    OPERATING = "OPERATING"
+    TICKETED_EVENT = "TICKETED_EVENT"
+    PRIVATE_EVENT = "PRIVATE_EVENT"
+    EXTRA_HOURS = "EXTRA_HOURS"
+    INFO = "INFO"
 
 
 class ScheduleEntry(BaseModel):
