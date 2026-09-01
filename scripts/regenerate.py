@@ -49,6 +49,7 @@ NULLABLE_PATCHES: list[tuple[str, str]] = [
     ("BoardingGroupQueue", "currentGroupEnd"),
     ("BoardingGroupQueue", "nextAllocationTime"),
     ("BoardingGroupQueue", "estimatedWait"),
+    ("PriceData", "amount"),
 ]
 
 

@@ -1,5 +1,29 @@
 # Changelog
 
+## [Unreleased]
+### Fixed
+- `PriceData.amount` is now nullable. The API returns `null` when a paid queue
+  exists but the provider does not publish a price, and `0` only when the queue
+  is genuinely free. Both previously arrived as `0`, so an unknown price was
+  indistinguishable from a free one.
+
+  Before this, a single null amount on one attraction made pydantic reject the
+  **entire** live response for that park, not just the one field.
+
+  Code testing `if price.amount:` or `if not price.amount:` now conflates
+  "free" with "price unknown" — the exact confusion this change exists to
+  remove. Switch to an explicit check:
+
+  ```python
+  if price.amount is None:
+      label = "price not published"
+  else:
+      label = f"{price.currency} {price.amount / 100:.2f}"
+  ```
+
+  `price.formatted` is optional and may be absent when the amount is unknown,
+  so do not rely on it alone to detect the case.
+
 ## [2.0.0] - 2026-04-15
 First stable v2 release. Identical surface to `2.0.0a1` after a brief alpha
 soak; no code changes since `2.0.0a1`. Bumped `Development Status` classifier
