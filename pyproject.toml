@@ -72,7 +72,9 @@ select = ["E", "F", "W", "I", "N", "UP", "B", "A", "SIM", "PL"]
 "themeparks/_errors.py" = ["A001", "UP045"]
 "themeparks/_transport.py" = ["A004"]
 "themeparks/__init__.py" = ["A004"]
-"themeparks/_generated/*.py" = ["N815", "F401"]
+# E501: field descriptions come from the upstream spec, so line length is not
+# this repo's to choose. The PriceData.amount description is already over.
+"themeparks/_generated/*.py" = ["N815", "F401", "E501"]
 
 [tool.mypy]
 python_version = "3.9"

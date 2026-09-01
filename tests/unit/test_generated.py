@@ -32,14 +32,8 @@ def test_price_amount_accepts_null():
     makes pydantic reject the entire live response.
     """
     assert (
-        PriceData.model_validate(
-            {"amount": None, "currency": "JPY", "formatted": "Unknown"}
-        ).amount
+        PriceData.model_validate({"amount": None, "currency": "JPY", "formatted": "Unknown"}).amount
         is None
     )
-    assert (
-        PriceData.model_validate({"amount": 0, "currency": "USD"}).amount == 0.0
-    )
-    assert (
-        PriceData.model_validate({"amount": 2100, "currency": "JPY"}).amount == 2100.0
-    )
+    assert PriceData.model_validate({"amount": 0, "currency": "USD"}).amount == 0.0
+    assert PriceData.model_validate({"amount": 2100, "currency": "JPY"}).amount == 2100.0
