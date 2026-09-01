@@ -40,7 +40,9 @@ dev = [
   "pytest>=8",
   "pytest-asyncio>=0.23",
   "pytest-recording>=0.13",
-  "ruff>=0.4",
+  # Upper-bounded: an unpinned minor bump is what started reformatting
+  # Markdown code blocks and turned CI red on unrelated PRs.
+  "ruff>=0.4,<0.17",
   "mypy>=1.10",
   "datamodel-code-generator[http]>=0.25",
 ]
@@ -63,6 +65,11 @@ asyncio_mode = "auto"
 [tool.ruff]
 line-length = 100
 target-version = "py39"
+# Markdown is documentation, not source. Ruff 0.16 began formatting Python
+# blocks inside it, which rewrites hand-written examples in README.md,
+# MIGRATION.md and docs/ — CI has been failing `ruff format --check .` on
+# those four files regardless of what any PR changes. Prose stays ours.
+extend-exclude = ["*.md"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP", "B", "A", "SIM", "PL"]
