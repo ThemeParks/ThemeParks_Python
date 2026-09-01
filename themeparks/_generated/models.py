@@ -6,10 +6,76 @@ from __future__ import annotations
 from enum import Enum
 from typing import Annotated, Any
 
-from pydantic import AwareDatetime, BaseModel, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 
-class EntityType(Enum):
+class BoardingGroupState(Enum):
+    """
+    State of boarding group availability
+    """
+
+    AVAILABLE = "AVAILABLE"
+    PAUSED = "PAUSED"
+    CLOSED = "CLOSED"
+
+
+class DiningAvailability(BaseModel):
+    partySize: float | None = None
+    """
+    Available party size
+    """
+    waitTime: float | None = None
+    """
+    Current wait time in minutes
+    """
+
+
+class EntityLocation(BaseModel):
+    latitude: float | None = None
+    """
+    Latitude coordinate of the entity location
+    """
+    longitude: float | None = None
+    """
+    Longitude coordinate of the entity location
+    """
+
+
+class ScheduleEntry(BaseModel):
+    """
+    Represents a single schedule entry
+    """
+
+    model_config = ConfigDict(
+        extra="allow",
+    )
+    date: str
+    """
+    The date of the schedule entry
+    """
+    type: str
+    """
+    Type of schedule entry e.g. OPERATING, EXTRA_HOURS, etc.
+    """
+    description: str | None = None
+    """
+    Optional description of the schedule entry
+    """
+    openingTime: str
+    """
+    Opening time for this schedule entry
+    """
+    closingTime: str
+    """
+    Closing time for this schedule entry
+    """
+
+
+class EntityType1(Enum):
+    """
+    Type of entity
+    """
+
     DESTINATION = "DESTINATION"
     PARK = "PARK"
     ATTRACTION = "ATTRACTION"
@@ -18,43 +84,295 @@ class EntityType(Enum):
     SHOW = "SHOW"
 
 
+class EntityType(Enum):
+    """
+    Type of entity in the theme park system
+    """
+
+    DESTINATION = "DESTINATION"
+    PARK = "PARK"
+    ATTRACTION = "ATTRACTION"
+    RESTAURANT = "RESTAURANT"
+    HOTEL = "HOTEL"
+    SHOW = "SHOW"
+
+
+class StandbyQueue(BaseModel):
+    waitTime: float | None = None
+    """
+    Current standby wait time in minutes
+    """
+
+
+class SingleRiderQueue(BaseModel):
+    waitTime: float | None = None
+    """
+    Current single rider wait time in minutes
+    """
+
+
+class BoardingGroupQueue(BaseModel):
+    allocationStatus: BoardingGroupState | None = None
+    currentGroupStart: float | None = None
+    """
+    Current boarding group start number
+    """
+    currentGroupEnd: float | None = None
+    """
+    Current boarding group end number
+    """
+    nextAllocationTime: AwareDatetime | None = None
+    """
+    Next boarding group allocation time
+    """
+    estimatedWait: float | None = None
+    """
+    Estimated wait time in minutes
+    """
+
+
+class PaidStandbyQueue(BaseModel):
+    waitTime: float | None = None
+    """
+    Current paid standby wait time in minutes
+    """
+
+
+class LiveShowTime(BaseModel):
+    type: str
+    """
+    Type of show time entry
+    """
+    startTime: AwareDatetime | None = None
+    """
+    Start time of the show
+    """
+    endTime: AwareDatetime | None = None
+    """
+    End time of the show
+    """
+
+
 class LiveStatusType(Enum):
+    """
+    Current operating status of an entity
+    """
+
     OPERATING = "OPERATING"
     DOWN = "DOWN"
     CLOSED = "CLOSED"
     REFURBISHMENT = "REFURBISHMENT"
 
 
+class Park(BaseModel):
+    id: str
+    """
+    Unique identifier of the park
+    """
+    name: str
+    """
+    Name of the park
+    """
+
+
+class EntityType2(Enum):
+    """
+    Type of entity
+    """
+
+    DESTINATION = "DESTINATION"
+    PARK = "PARK"
+    ATTRACTION = "ATTRACTION"
+    RESTAURANT = "RESTAURANT"
+    HOTEL = "HOTEL"
+    SHOW = "SHOW"
+
+
+class PriceData(BaseModel):
+    amount: float | None = None
+    """
+    Numerical price amount, in the currency's lowest denomination (e.g. cents). null when the item costs money but the provider does not publish an amount; 0 means genuinely free
+    """
+    currency: str
+    """
+    Currency code
+    """
+    formatted: str | None = None
+    """
+    Formatted price string
+    """
+
+
+class Type(Enum):
+    """
+    Type of schedule entry
+    """
+
+    OPERATING = "OPERATING"
+    TICKETED_EVENT = "TICKETED_EVENT"
+    PRIVATE_EVENT = "PRIVATE_EVENT"
+    EXTRA_HOURS = "EXTRA_HOURS"
+    INFO = "INFO"
+
+
 class ReturnTimeState(Enum):
+    """
+    State of return time availability
+    """
+
     AVAILABLE = "AVAILABLE"
     TEMP_FULL = "TEMP_FULL"
     FINISHED = "FINISHED"
 
 
-class BoardingGroupState(Enum):
-    AVAILABLE = "AVAILABLE"
-    PAUSED = "PAUSED"
-    CLOSED = "CLOSED"
-
-
-class PriceData(BaseModel):
+class Price(BaseModel):
     amount: float
+    """
+    Price amount
+    """
     currency: str
+    """
+    Currency code
+    """
     formatted: str | None = None
+    """
+    Formatted price string
+    """
 
 
-class StandbyQueue(BaseModel):
-    waitTime: float | None = None
+class SchedulePriceType(Enum):
+    """
+    Type of schedule price
+    """
+
+    ADMISSION = "ADMISSION"
+    PACKAGE = "PACKAGE"
+    ATTRACTION = "ATTRACTION"
 
 
-class SingleRiderQueue(BaseModel):
-    waitTime: float | None = None
+class TagData(BaseModel):
+    tag: str
+    """
+    Tag identifier
+    """
+    tagName: str
+    """
+    Human readable tag name
+    """
+    id: str | None = None
+    """
+    Unique identifier
+    """
+    value: Any | None = None
+    """
+    Tag value - can be string, number or object
+    """
+
+
+class DestinationEntry(BaseModel):
+    id: str
+    """
+    Unique identifier of the destination
+    """
+    name: str
+    """
+    Name of the destination
+    """
+    slug: str | None = None
+    """
+    URL-friendly slug for the destination
+    """
+    externalId: str | None = None
+    """
+    External entity ID from the source data provider
+    """
+    parks: list[Park]
+    """
+    Array of parks within this destination
+    """
+
+
+class DestinationsResponse(BaseModel):
+    destinations: list[DestinationEntry]
+    """
+    Array of all destinations
+    """
+
+
+class EntityChild(BaseModel):
+    id: str
+    """
+    Unique entity identifier
+    """
+    name: str
+    """
+    Entity name
+    """
+    entityType: EntityType
+    externalId: str | None = None
+    """
+    External identifier
+    """
+    parentId: str | None = None
+    """
+    Parent entity identifier
+    """
+    location: EntityLocation | None = None
+
+
+class EntityChildrenResponse(BaseModel):
+    id: str | None = None
+    """
+    Parent entity identifier
+    """
+    name: str | None = None
+    """
+    Parent entity name
+    """
+    entityType: EntityType | None = None
+    timezone: str | None = None
+    """
+    Entity timezone
+    """
+    children: list[EntityChild] | None = None
+
+
+class EntityData(BaseModel):
+    id: str
+    """
+    Unique entity identifier
+    """
+    name: str
+    """
+    Entity name
+    """
+    entityType: EntityType
+    parentId: str | None = None
+    """
+    Parent entity identifier
+    """
+    destinationId: str | None = None
+    """
+    DestinationEntry identifier
+    """
+    timezone: str
+    """
+    Entity timezone
+    """
+    location: EntityLocation | None = None
+    tags: list[TagData] | None = None
 
 
 class ReturnTimeQueue(BaseModel):
     state: ReturnTimeState | None = None
     returnStart: AwareDatetime | None = None
+    """
+    Start time of return window
+    """
     returnEnd: AwareDatetime | None = None
+    """
+    End time of return window
+    """
 
 
 class PaidReturnTimeQueue(BaseModel):
@@ -62,18 +380,6 @@ class PaidReturnTimeQueue(BaseModel):
     returnStart: AwareDatetime | None = None
     returnEnd: AwareDatetime | None = None
     price: PriceData | None = None
-
-
-class BoardingGroupQueue(BaseModel):
-    allocationStatus: BoardingGroupState | None = None
-    currentGroupStart: float | None = None
-    currentGroupEnd: float | None = None
-    nextAllocationTime: AwareDatetime | None = None
-    estimatedWait: float | None = None
-
-
-class PaidStandbyQueue(BaseModel):
-    waitTime: float | None = None
 
 
 class LiveQueue(BaseModel):
@@ -85,63 +391,41 @@ class LiveQueue(BaseModel):
     PAID_STANDBY: PaidStandbyQueue | None = None
 
 
-class LiveShowTime(BaseModel):
-    type: str
-    startTime: AwareDatetime | None = None
-    endTime: AwareDatetime | None = None
-
-
-class DiningAvailability(BaseModel):
-    partySize: float | None = None
-    waitTime: float | None = None
-
-
-class TagData(BaseModel):
-    tag: str
-    tagName: str
+class SchedulePriceObject(BaseModel):
+    type: SchedulePriceType | None = None
+    """
+    Type of price object
+    """
     id: str | None = None
-    value: str | float | dict[str, Any] | None = None
-
-
-class Location(BaseModel):
-    latitude: float | None = None
-    longitude: float | None = None
-
-
-class EntityData(BaseModel):
-    id: str
-    name: str
-    entityType: EntityType
-    parentId: str | None = None
-    destinationId: str | None = None
-    timezone: str
-    location: Location | None = None
-    tags: list[TagData] | None = None
-
-
-class EntityChild(BaseModel):
-    id: str
-    name: str
-    entityType: EntityType
-    externalId: str | None = None
-    parentId: str | None = None
-    location: Location | None = None
-
-
-class EntityChildrenResponse(BaseModel):
-    id: str | None = None
+    """
+    Unique identifier
+    """
     name: str | None = None
-    entityType: EntityType | None = None
-    timezone: str | None = None
-    children: list[EntityChild] | None = None
+    """
+    Name of the price object
+    """
+    price: Price | None = None
+    available: bool | None = None
+    """
+    Whether this price option is available
+    """
 
 
 class EntityLiveData(BaseModel):
     id: str
+    """
+    Entity identifier
+    """
     name: str
+    """
+    Entity name
+    """
     entityType: EntityType
     status: LiveStatusType | None = None
     lastUpdated: AwareDatetime
+    """
+    Last update timestamp
+    """
     queue: LiveQueue | None = None
     showtimes: list[LiveShowTime] | None = None
     operatingHours: list[LiveShowTime] | None = None
@@ -150,72 +434,83 @@ class EntityLiveData(BaseModel):
 
 class EntityLiveDataResponse(BaseModel):
     id: str | None = None
+    """
+    Entity identifier
+    """
     name: str | None = None
+    """
+    Entity name
+    """
     entityType: EntityType | None = None
     timezone: str | None = None
+    """
+    Entity timezone
+    """
     liveData: list[EntityLiveData] | None = None
 
 
-class Type(Enum):
-    ADMISSION = "ADMISSION"
-    PACKAGE = "PACKAGE"
-    ATTRACTION = "ATTRACTION"
-
-
-class SchedulePriceObject(BaseModel):
-    type: Type | None = None
-    id: str | None = None
-    name: str | None = None
-    price: PriceData | None = None
-    available: bool | None = None
-
-
-class Type1(Enum):
-    OPERATING = "OPERATING"
-    TICKETED_EVENT = "TICKETED_EVENT"
-    PRIVATE_EVENT = "PRIVATE_EVENT"
-    EXTRA_HOURS = "EXTRA_HOURS"
-    INFO = "INFO"
-
-
-class ScheduleEntry(BaseModel):
+class PricedScheduleEntry(BaseModel):
     date: str
+    """
+    Schedule date
+    """
     openingTime: AwareDatetime
+    """
+    Opening time
+    """
     closingTime: AwareDatetime
-    type: Type1
+    """
+    Closing time
+    """
+    type: Type
+    """
+    Type of schedule entry
+    """
     purchases: list[SchedulePriceObject] | None = None
+    """
+    Available purchases for this schedule entry
+    """
+
+
+class ParkSchedule(BaseModel):
+    id: str | None = None
+    """
+    Entity identifier
+    """
+    name: str | None = None
+    """
+    Entity name
+    """
+    entityType: EntityType2 | None = None
+    """
+    Type of entity
+    """
+    timezone: str | None = None
+    """
+    Entity timezone
+    """
+    schedule: list[PricedScheduleEntry] | None = None
 
 
 class EntityScheduleResponse(BaseModel):
     id: str | None = None
+    """
+    Entity identifier
+    """
     name: str | None = None
-    entityType: EntityType | None = None
+    """
+    Entity name
+    """
+    entityType: EntityType1 | None = None
+    """
+    Type of entity
+    """
     timezone: str | None = None
+    """
+    Entity timezone
+    """
     schedule: list[ScheduleEntry] | None = None
-    parks: list[EntityScheduleResponse] | None = None
+    parks: list[ParkSchedule] | None = None
     """
-    Only included for destinations, this will list all parks within the destination
+    Only included for destinations, lists all parks within the destination
     """
-
-
-class DestinationParkEntry(BaseModel):
-    id: str | None = None
-    name: str | None = None
-
-
-class DestinationEntry(BaseModel):
-    id: str | None = None
-    name: str | None = None
-    slug: str | None = None
-    externalId: str | None = None
-    """
-    External entity ID from the source data provider
-    """
-    parks: list[DestinationParkEntry] | None = None
-
-
-class DestinationsResponse(BaseModel):
-    destinations: list[DestinationEntry] | None = None
-
-
-EntityScheduleResponse.model_rebuild()

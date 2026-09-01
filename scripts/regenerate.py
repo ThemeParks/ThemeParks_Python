@@ -28,6 +28,11 @@ CLASS_RENAMES: dict[str, str] = {
     "PAIDRETURNTIME": "PaidReturnTimeQueue",
     "BOARDINGGROUP": "BoardingGroupQueue",
     "PAIDSTANDBY": "PaidStandbyQueue",
+    # The v2 cutover renamed these two in the published spec. The ergonomic
+    # layer and the public API keep the older names, so map them back rather
+    # than churning every import and every caller.
+    "Destination": "DestinationEntry",
+    "EntityScheduleEntry": "ScheduleEntry",
 }
 
 # (class_name, field_name) pairs for fields the OpenAPI spec marks nullable
@@ -49,6 +54,7 @@ NULLABLE_PATCHES: list[tuple[str, str]] = [
     ("BoardingGroupQueue", "currentGroupEnd"),
     ("BoardingGroupQueue", "nextAllocationTime"),
     ("BoardingGroupQueue", "estimatedWait"),
+    ("PriceData", "amount"),
 ]
 
 

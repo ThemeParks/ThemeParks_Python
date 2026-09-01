@@ -16,9 +16,19 @@ jobs:
         with:
           python-version: '3.12'
       - run: pip install -e '.[dev]'
-      - run: python scripts/regenerate.py
+
+      # Must not be fatal. A regeneration that fails is exactly the signal
+      # worth surfacing, and this step used to abort the job — so a breaking
+      # upstream change produced no PR, no smoke run and no issue. It went
+      # unnoticed for months.
+      - name: Regenerate models
+        id: regen
+        continue-on-error: true
+        run: python scripts/regenerate.py
+
       - name: Run live smoke tests
         id: smoke
+        if: steps.regen.outcome == 'success'
         continue-on-error: true
         run: pytest tests/live -v
       - name: Open PR if models changed
@@ -27,9 +37,25 @@ jobs:
           branch: bot/spec-drift
           commit-message: "chore: regenerate models from upstream spec"
           title: "Spec drift: regenerate models"
-          body: "Automated regeneration from https://api.themeparks.wiki/docs/v1.yaml"
+          body: |
+            Automated regeneration from https://api.themeparks.wiki/docs/v1.yaml
+
+            - regenerate: ${{ steps.regen.outcome }}
+            - live smoke tests: ${{ steps.smoke.outcome || 'skipped (regenerate failed)' }}
+
+            A regenerate failure means the upstream contract changed in a way
+            this client cannot absorb automatically. Do not merge until green.
           add-paths: |
             themeparks/_generated/models.py
+      - name: Open issue if regeneration failed
+        if: steps.regen.outcome == 'failure'
+        uses: JasonEtco/create-an-issue@v2
+        env:
+          GITHUB_TOKEN: '${{ secrets.GITHUB_TOKEN }}'
+        with:
+          filename: .github/DRIFT_REGEN_FAILURE.md
+          update_existing: true
+
       - name: Open issue if smoke tests failed
         if: steps.smoke.outcome == 'failure'
         uses: JasonEtco/create-an-issue@v2
@@ -37,3 +63,11 @@ jobs:
           GITHUB_TOKEN: '${{ secrets.GITHUB_TOKEN }}'
         with:
           filename: .github/SMOKE_FAILURE.md
+
+      # The job must go red when regeneration did, or a silent failure is just
+      # a green tick with a stale client behind it.
+      - name: Fail the run if regeneration failed
+        if: steps.regen.outcome == 'failure'
+        run: |
+          echo "::error::Model regeneration failed — upstream contract changed."
+          exit 1
