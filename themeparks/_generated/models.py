@@ -38,7 +38,7 @@ class BoardingGroupState(Enum):
 
 
 class PriceData(BaseModel):
-    amount: float
+    amount: float | None = None
     currency: str
     formatted: str | None = None
 
