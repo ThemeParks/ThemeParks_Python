@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [2.0.1] - 2026-09-01
 ### Fixed
 - `PriceData.amount` is now nullable. The API returns `null` when a paid queue
   exists but the provider does not publish a price, and `0` only when the queue
