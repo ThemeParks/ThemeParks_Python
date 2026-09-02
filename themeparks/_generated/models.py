@@ -71,19 +71,6 @@ class ScheduleEntry(BaseModel):
     """
 
 
-class EntityType1(Enum):
-    """
-    Type of entity
-    """
-
-    DESTINATION = "DESTINATION"
-    PARK = "PARK"
-    ATTRACTION = "ATTRACTION"
-    RESTAURANT = "RESTAURANT"
-    HOTEL = "HOTEL"
-    SHOW = "SHOW"
-
-
 class EntityType(Enum):
     """
     Type of entity in the theme park system
@@ -173,19 +160,6 @@ class Park(BaseModel):
     """
     Name of the park
     """
-
-
-class EntityType2(Enum):
-    """
-    Type of entity
-    """
-
-    DESTINATION = "DESTINATION"
-    PARK = "PARK"
-    ATTRACTION = "ATTRACTION"
-    RESTAURANT = "RESTAURANT"
-    HOTEL = "HOTEL"
-    SHOW = "SHOW"
 
 
 class PriceData(BaseModel):
@@ -481,7 +455,7 @@ class ParkSchedule(BaseModel):
     """
     Entity name
     """
-    entityType: EntityType2 | None = None
+    entityType: EntityType | None = None
     """
     Type of entity
     """
@@ -501,7 +475,7 @@ class EntityScheduleResponse(BaseModel):
     """
     Entity name
     """
-    entityType: EntityType1 | None = None
+    entityType: EntityType | None = None
     """
     Type of entity
     """
