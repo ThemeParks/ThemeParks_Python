@@ -1,5 +1,61 @@
 # Changelog
 
+## [3.0.0] - 2026-09-08
+
+### Fixed
+
+- **Schedule entries now carry `purchases`.** The upstream spec described a
+  park's schedule two different ways: precisely when nested under a
+  destination, loosely when fetched directly. This client uses the direct
+  path, so `purchases` was absent from the model entirely. Magic Kingdom
+  serves 26 entries carrying purchases.
+
+  ```python
+  sched = client.entity(park_id).schedule()
+  for day in sched.schedule or []:
+      for p in day.purchases or []:
+          print(p.name, p.price.amount, p.price.currency)
+  ```
+
+- **A null price on a schedule purchase no longer rejects the response.**
+  2.0.1 made `PriceData.amount` nullable, but the schedule path used a
+  second, inline price model that kept `amount` non-nullable. Both now use
+  `PriceData`. Tokyo Disneyland serves six Premier Access rows with a null
+  amount, and this client raised `ValidationError` on every one of them.
+
+- Schedule entries gained the `description` field the API has always sent.
+
+### Changed
+
+- **BREAKING — `ScheduleEntry.type` is an enum, not a `str`.** It was
+  `type: str`; it is now a `Type` enum. This breaks *silently*: the comparison
+  does not raise, it just stops being true.
+
+  ```python
+  # before: True.  now: False, with no error.
+  if day.type == "OPERATING":
+      ...
+
+  # use one of these instead
+  if day.type.value == "OPERATING":
+      ...
+  from themeparks._generated.models import Type
+  if day.type is Type.OPERATING:
+      ...
+  ```
+
+  Audit any comparison of `.type` against a string literal before upgrading.
+  This is the one change here that will not announce itself.
+
+- **BREAKING — the `PricedScheduleEntry` and `Price` models are gone.**
+  `PricedScheduleEntry` is now `ScheduleEntry`, and the inline `Price` model
+  is replaced by `PriceData`. Neither was exported from the package root, so
+  this only affects code importing from `themeparks._generated.models`
+  directly — a private module.
+
+- The duplicate `EntityType1` and `EntityType2` enums collapse into
+  `EntityType`. Same members, same values.
+
 ## [2.0.1] - 2026-09-01
 ### Fixed
 - `PriceData.amount` is now nullable. The API returns `null` when a paid queue
