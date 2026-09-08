@@ -8,14 +8,19 @@
   park's schedule two different ways: precisely when nested under a
   destination, loosely when fetched directly. This client uses the direct
   path, so `purchases` was absent from the model entirely. Magic Kingdom
-  serves 26 entries carrying purchases.
+  served 26 of 79 upcoming entries with purchases on the day this shipped.
 
   ```python
-  sched = client.entity(park_id).schedule()
+  sched = client.entity(park_id).schedule.upcoming()
   for day in sched.schedule or []:
       for p in day.purchases or []:
-          print(p.name, p.price.amount, p.price.currency)
+          print(day.date, p.name, p.price.amount, p.price.currency)
+          # 2026-09-08 Lightning Lane for Seven Dwarfs Mine Train 1100.0 USD
   ```
+
+  Purchases are not limited to `TICKETED_EVENT` days — Lightning Lane entries
+  attach to ordinary `OPERATING` days, so do not filter on `type` to find
+  them.
 
 - **A null price on a schedule purchase no longer rejects the response.**
   2.0.1 made `PriceData.amount` nullable, but the schedule path used a
