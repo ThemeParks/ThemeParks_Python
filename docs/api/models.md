@@ -95,7 +95,7 @@ for the full set.
     options:
       heading_level: 3
 
-::: themeparks._generated.models.DestinationParkEntry
+::: themeparks._generated.models.Park
     options:
       heading_level: 3
 
@@ -105,7 +105,7 @@ for the full set.
 
 ## Shared
 
-::: themeparks._generated.models.Location
+::: themeparks._generated.models.EntityLocation
     options:
       heading_level: 3
 
