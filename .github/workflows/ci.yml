@@ -19,3 +19,16 @@ jobs:
       - run: ruff format --check .
       - run: mypy themeparks
       - run: pytest tests/unit
+
+  # The Docs workflow only runs on push to main, so until this job existed a
+  # PR that renamed a model merged green and broke the docs deploy afterwards.
+  # Building the site here means the same PR fails before it lands.
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - run: pip install -e '.[docs]'
+      - run: mkdocs build --strict
