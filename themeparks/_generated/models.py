@@ -6,7 +6,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Annotated, Any
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, BaseModel, Field
 
 
 class BoardingGroupState(Enum):
@@ -39,49 +39,6 @@ class EntityLocation(BaseModel):
     """
     Longitude coordinate of the entity location
     """
-
-
-class ScheduleEntry(BaseModel):
-    """
-    Represents a single schedule entry
-    """
-
-    model_config = ConfigDict(
-        extra="allow",
-    )
-    date: str
-    """
-    The date of the schedule entry
-    """
-    type: str
-    """
-    Type of schedule entry e.g. OPERATING, EXTRA_HOURS, etc.
-    """
-    description: str | None = None
-    """
-    Optional description of the schedule entry
-    """
-    openingTime: str
-    """
-    Opening time for this schedule entry
-    """
-    closingTime: str
-    """
-    Closing time for this schedule entry
-    """
-
-
-class EntityType1(Enum):
-    """
-    Type of entity
-    """
-
-    DESTINATION = "DESTINATION"
-    PARK = "PARK"
-    ATTRACTION = "ATTRACTION"
-    RESTAURANT = "RESTAURANT"
-    HOTEL = "HOTEL"
-    SHOW = "SHOW"
 
 
 class EntityType(Enum):
@@ -175,19 +132,6 @@ class Park(BaseModel):
     """
 
 
-class EntityType2(Enum):
-    """
-    Type of entity
-    """
-
-    DESTINATION = "DESTINATION"
-    PARK = "PARK"
-    ATTRACTION = "ATTRACTION"
-    RESTAURANT = "RESTAURANT"
-    HOTEL = "HOTEL"
-    SHOW = "SHOW"
-
-
 class PriceData(BaseModel):
     amount: float | None = None
     """
@@ -203,18 +147,6 @@ class PriceData(BaseModel):
     """
 
 
-class Type(Enum):
-    """
-    Type of schedule entry
-    """
-
-    OPERATING = "OPERATING"
-    TICKETED_EVENT = "TICKETED_EVENT"
-    PRIVATE_EVENT = "PRIVATE_EVENT"
-    EXTRA_HOURS = "EXTRA_HOURS"
-    INFO = "INFO"
-
-
 class ReturnTimeState(Enum):
     """
     State of return time availability
@@ -225,19 +157,16 @@ class ReturnTimeState(Enum):
     FINISHED = "FINISHED"
 
 
-class Price(BaseModel):
-    amount: float
+class Type(Enum):
     """
-    Price amount
+    Type of schedule entry
     """
-    currency: str
-    """
-    Currency code
-    """
-    formatted: str | None = None
-    """
-    Formatted price string
-    """
+
+    OPERATING = "OPERATING"
+    TICKETED_EVENT = "TICKETED_EVENT"
+    PRIVATE_EVENT = "PRIVATE_EVENT"
+    EXTRA_HOURS = "EXTRA_HOURS"
+    INFO = "INFO"
 
 
 class SchedulePriceType(Enum):
@@ -404,7 +333,10 @@ class SchedulePriceObject(BaseModel):
     """
     Name of the price object
     """
-    price: Price | None = None
+    price: PriceData | None = None
+    """
+    Price of this purchase option
+    """
     available: bool | None = None
     """
     Whether this price option is available
@@ -449,7 +381,7 @@ class EntityLiveDataResponse(BaseModel):
     liveData: list[EntityLiveData] | None = None
 
 
-class PricedScheduleEntry(BaseModel):
+class ScheduleEntry(BaseModel):
     date: str
     """
     Schedule date
@@ -466,6 +398,10 @@ class PricedScheduleEntry(BaseModel):
     """
     Type of schedule entry
     """
+    description: str | None = None
+    """
+    Optional description of the schedule entry
+    """
     purchases: list[SchedulePriceObject] | None = None
     """
     Available purchases for this schedule entry
@@ -481,7 +417,7 @@ class ParkSchedule(BaseModel):
     """
     Entity name
     """
-    entityType: EntityType2 | None = None
+    entityType: EntityType | None = None
     """
     Type of entity
     """
@@ -489,7 +425,7 @@ class ParkSchedule(BaseModel):
     """
     Entity timezone
     """
-    schedule: list[PricedScheduleEntry] | None = None
+    schedule: list[ScheduleEntry] | None = None
 
 
 class EntityScheduleResponse(BaseModel):
@@ -501,7 +437,7 @@ class EntityScheduleResponse(BaseModel):
     """
     Entity name
     """
-    entityType: EntityType1 | None = None
+    entityType: EntityType | None = None
     """
     Type of entity
     """
