@@ -4,9 +4,9 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Annotated, Any
+from typing import Annotated
 
-from pydantic import AwareDatetime, BaseModel, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 
 class BoardingGroupState(Enum):
@@ -28,6 +28,20 @@ class DiningAvailability(BaseModel):
     """
     Current wait time in minutes
     """
+
+
+class AttractionType(Enum):
+    """
+    Kind of attraction. Present on ATTRACTION entities.
+    """
+
+    UNKNOWN = "UNKNOWN"
+    RIDE = "RIDE"
+    SHOW = "SHOW"
+    TRANSPORT = "TRANSPORT"
+    PARADE = "PARADE"
+    MEET_AND_GREET = "MEET_AND_GREET"
+    OTHER = "OTHER"
 
 
 class EntityLocation(BaseModel):
@@ -179,25 +193,6 @@ class SchedulePriceType(Enum):
     ATTRACTION = "ATTRACTION"
 
 
-class TagData(BaseModel):
-    tag: str
-    """
-    Tag identifier
-    """
-    tagName: str
-    """
-    Human readable tag name
-    """
-    id: str | None = None
-    """
-    Unique identifier
-    """
-    value: Any | None = None
-    """
-    Tag value - can be string, number or object
-    """
-
-
 class DestinationEntry(BaseModel):
     id: str
     """
@@ -247,6 +242,10 @@ class EntityChild(BaseModel):
     Parent entity identifier
     """
     location: EntityLocation | None = None
+    slug: str | None = None
+    """
+    URL-friendly slug
+    """
 
 
 class EntityChildrenResponse(BaseModel):
@@ -267,6 +266,13 @@ class EntityChildrenResponse(BaseModel):
 
 
 class EntityData(BaseModel):
+    """
+    A single entity. Beyond the properties listed here, an entity may carry additional tag-derived properties named after the tag's slug, for example `minimumHeight` (integer, centimetres) or `mayGetWet` (boolean). The set is open-ended and driven by data rather than fixed by this contract, so clients should read them defensively rather than assume any particular tag is present.
+    """
+
+    model_config = ConfigDict(
+        extra="allow",
+    )
     id: str
     """
     Unique entity identifier
@@ -276,6 +282,10 @@ class EntityData(BaseModel):
     Entity name
     """
     entityType: EntityType
+    attractionType: AttractionType | None = None
+    """
+    Kind of attraction. Present on ATTRACTION entities.
+    """
     parentId: str | None = None
     """
     Parent entity identifier
@@ -284,12 +294,23 @@ class EntityData(BaseModel):
     """
     DestinationEntry identifier
     """
+    parkId: str | None = None
+    """
+    Identifier of the park this entity belongs to. Absent on destinations and on parks themselves.
+    """
     timezone: str
     """
     Entity timezone
     """
     location: EntityLocation | None = None
-    tags: list[TagData] | None = None
+    externalId: str | None = None
+    """
+    Identifier used by the source data provider.
+    """
+    slug: str | None = None
+    """
+    URL-friendly slug. Served for destinations.
+    """
 
 
 class ReturnTimeQueue(BaseModel):
