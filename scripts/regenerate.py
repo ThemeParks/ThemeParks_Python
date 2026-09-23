@@ -55,6 +55,36 @@ NULLABLE_PATCHES: list[tuple[str, str]] = [
     ("BoardingGroupQueue", "nextAllocationTime"),
     ("BoardingGroupQueue", "estimatedWait"),
     ("PriceData", "amount"),
+    # History, added 2026-09-23 when the endpoints were first wrapped. Derived
+    # from the spec rather than found one failing test at a time: every
+    # History* schema field that is both `required` and `nullable: true` is
+    # listed here, because datamodel-code-generator honours neither together.
+    #
+    # `next` is the one that matters most. It is null on the LAST page of every
+    # paged response, so without this the SDK parses every page of a backfill
+    # except the one that ends it.
+    ("HistoryCoverage", "firstRecordedAt"),
+    ("HistoryCoverageDocument", "parentId"),
+    ("HistoryCoverageDocument", "destinationId"),
+    ("HistoryCoverageDocument", "firstRecordedAt"),
+    ("HistoryCoverageDocument", "lastRecordedAt"),
+    ("HistoryCoverageDocument", "retrievableThrough"),
+    ("HistoryDailyEnvelope", "parentId"),
+    ("HistoryDailyEnvelope", "destinationId"),
+    ("HistoryDailyEnvelope", "next"),
+    ("HistoryDailyRow", "firstOperatingAt"),
+    ("HistoryDailyRow", "lastClosedAt"),
+    ("HistoryEnvelope", "parentId"),
+    ("HistoryEnvelope", "destinationId"),
+    ("HistoryEnvelope", "next"),
+    ("HistoryParkCoverageDocument", "parentId"),
+    ("HistoryParkCoverageDocument", "destinationId"),
+    ("HistoryParkDailyEnvelope", "parentId"),
+    ("HistoryParkDailyEnvelope", "destinationId"),
+    ("HistoryParkDailyEnvelope", "next"),
+    ("HistoryParkRawEnvelope", "parentId"),
+    ("HistoryParkRawEnvelope", "destinationId"),
+    ("HistoryParkRawEnvelope", "next"),
 ]
 
 
@@ -97,9 +127,17 @@ def apply_nullable_patches(text: str) -> str:
     for class_name, field_name in NULLABLE_PATCHES:
         # Match: "class <CLASS>(BaseModel):" then any indented lines until we
         # hit the target field line. Rewrite just that field line.
+        # The skip pattern has to cross BLANK lines as well as indented ones.
+        # datamodel-code-generator puts a docstring on every schema that has a
+        # description, followed by an empty line, and an empty line is "\n"
+        # with no leading spaces. The original `(?:    [^\n]*\n)*?` stopped
+        # dead at it, so every DOCUMENTED class went unpatched while the
+        # undocumented queue variants worked. It warned and carried on, and the
+        # result was a model that cannot parse the last page of any paged
+        # response, where `next` is null.
         pattern = re.compile(
             rf"(?P<head>class {class_name}\(BaseModel\):\n"
-            rf"(?:    [^\n]*\n)*?"
+            rf"(?:(?:    [^\n]*)?\n)*?"
             rf"    {field_name}:\s*)"
             rf"(?P<line>[^\n]+)"
             rf"(?P<tail>\n)",
@@ -114,9 +152,17 @@ def apply_nullable_patches(text: str) -> str:
 
         new_text, count = pattern.subn(repl, text, count=1)
         if count == 0:
-            print(
-                f"warning: nullable patch did not match {class_name}.{field_name}",
-                file=sys.stderr,
+            # FATAL, not a warning. An unapplied nullable patch produces a
+            # model that rejects a response the API really sends, and the
+            # consequence is invisible until a user hits it: `next` is null on
+            # the last page of every paged response, so the SDK would parse
+            # every page of a backfill except the one that ends it. This was a
+            # warning until 2026-09-23, and it had been printing one for every
+            # documented class without anyone noticing.
+            raise SystemExit(
+                f"nullable patch did not match {class_name}.{field_name}. "
+                "Either the field left the spec, or the generator's output "
+                "shape moved. Do not ship the models until this matches."
             )
         text = new_text
     return text

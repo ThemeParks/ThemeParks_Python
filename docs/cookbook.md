@@ -1,6 +1,6 @@
 # Cookbook
 
-Three complete recipes you can copy, paste, and run. Each one uses real
+Complete recipes you can copy, paste, and run. Each one uses real
 entity IDs from the live ThemeParks.wiki API.
 
 ## Recipe 1 — Wait times in order (longest → shortest)
@@ -287,3 +287,115 @@ with ThemeParks() as tp:
             #         or {"type": "PAID_RETURN_TIME", "state": "AVAILABLE", "price": {...}, ...}
             print(entry.name, q["type"], q)
 ```
+
+## Recipe 6 — Back fill a park's history to NDJSON
+
+This is the job most people buy history for: get everything that already
+exists into your own store once, then follow the live feed from there.
+
+Two things make the difference between a backfill that takes an afternoon and
+one that takes a week.
+
+**Ask the park, not the rides.** `tp.entity(park_id).history` answers every
+entity in that park in one request. The same data fetched ride by ride is
+around a hundred times more calls for a large park, and it counts against the
+same budget.
+
+**Start with `span()`.** It tells you the first day the archive holds and the
+last day your key may retrieve, so you ask for days that exist instead of
+discovering the ends by trial. Bound the backfill by `retrievable_through`,
+not by `recorded_to`: the archive holds more than a free or Pro key is
+entitled to read, and asking past the entitlement is how a backfill walks into
+a wall of 403s at the end of a long run.
+
+```python
+import json
+from themeparks import ThemeParks
+
+DISNEYLAND = "7340550b-c14d-4def-80bb-acdb51d49a66"
+
+with ThemeParks(api_key="YOUR_KEY") as tp:
+    history = tp.entity(DISNEYLAND).history
+
+    span = history.span()
+    print(f"archive from {span.archive_from}, yours through {span.retrievable_through}")
+
+    with open("disneyland-daily.ndjson", "w") as out:
+        for entity_id, row in history.days(span.archive_from, span.retrievable_through):
+            out.write(json.dumps({"entityId": entity_id, **row.model_dump(mode="json")}) + "\n")
+```
+
+`days()` follows the server's paging links until there are no more, and yields
+`(entity id, row)` pairs as they arrive. Nothing accumulates in memory, so the
+file is the only thing that grows.
+
+`span()` returns the same three fields whether you asked about a park or a
+single ride, which the underlying coverage documents do not: a park nests them
+under `summary`, an entity carries them at the top level under different
+names.
+
+## Recipe 7 — Resume a backfill when the budget runs out
+
+History has an hourly call budget separate from the per-minute rate limit. A
+big backfill will hit it, and when it does the server asks you to wait — up to
+most of an hour, because that is when the window rolls.
+
+The SDK will not silently sleep that long. Past `max_wait` (120 seconds by
+default) it raises `BudgetExhaustedError`, carrying the `retry_after` the
+server sent, so you can write down where you got to and come back:
+
+```python
+import json
+from pathlib import Path
+from themeparks import ThemeParks, BudgetExhaustedError
+
+DISNEYLAND = "7340550b-c14d-4def-80bb-acdb51d49a66"
+CHECKPOINT = Path("disneyland.checkpoint")
+OUT = Path("disneyland-daily.ndjson")
+
+with ThemeParks(api_key="YOUR_KEY") as tp:
+    history = tp.entity(DISNEYLAND).history
+    span = history.span()
+
+    start = CHECKPOINT.read_text().strip() if CHECKPOINT.exists() else span.archive_from
+    last_day = None
+
+    try:
+        with OUT.open("a") as out:
+            for entity_id, row in history.days(start, span.retrievable_through):
+                out.write(json.dumps({"entityId": entity_id, **row.model_dump(mode="json")}) + "\n")
+                last_day = row.date
+    except BudgetExhaustedError as exc:
+        if last_day is not None:
+            CHECKPOINT.write_text(str(last_day))
+        print(f"budget spent at {last_day}; run again in {exc.retry_after:.0f}s")
+    else:
+        CHECKPOINT.unlink(missing_ok=True)
+        print("done")
+```
+
+Running the same script again picks up from the checkpoint. Re-reading the
+last day is deliberate: a page can end mid-day, and one duplicate day is
+cheaper to de-duplicate on your side than a missing one is to notice.
+
+A complete version of this, with `--csv` output and a park list, is in
+[`examples/backfill.py`](https://github.com/ThemeParks/ThemeParks_Python/blob/main/examples/backfill.py).
+
+## Recipe 8 — Every recorded change for one day
+
+`days()` gives one summary row per park-local day. When you want the
+underlying observations — every change we recorded, at the time we recorded
+it — use `changes()`:
+
+```python
+from themeparks import ThemeParks
+
+with ThemeParks(api_key="YOUR_KEY") as tp:
+    for entity_id, row in tp.entity(DISNEYLAND).history.changes("2026-09-20"):
+        print(row.time, entity_id, row.status, row.queue)
+```
+
+A park answers one day per call. A single entity answers up to 31 days, so
+pass `start=` and `end=` there instead of `date=`. You do not have to
+remember which cap applies: ask for the range you want, and the API either
+answers or tells you it is too long.

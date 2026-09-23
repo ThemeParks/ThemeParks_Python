@@ -89,6 +89,7 @@ class ThemeParks:
         retry: RetryConfig | None = None,
         cache: Cache | bool | CacheConfig | None = None,
         transport: httpx.BaseTransport | None = None,
+        api_key: str | None = None,
     ) -> None:
         self._client = httpx.Client(base_url=base_url, timeout=timeout, transport=transport)
         sync_t = SyncTransport(
@@ -96,6 +97,7 @@ class ThemeParks:
             base_url=base_url,
             user_agent=user_agent or _default_user_agent(),
             retry=retry or RetryConfig(),
+            api_key=api_key,
         )
         cache_impl = _build_cache(cache)
         inner: Any = _CachingSyncTransport(sync_t, cache_impl) if cache_impl else sync_t
@@ -146,6 +148,7 @@ class AsyncThemeParks:
         retry: RetryConfig | None = None,
         cache: Cache | bool | CacheConfig | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
+        api_key: str | None = None,
     ) -> None:
         self._client = httpx.AsyncClient(base_url=base_url, timeout=timeout, transport=transport)
         async_t = AsyncTransport(
@@ -153,6 +156,7 @@ class AsyncThemeParks:
             base_url=base_url,
             user_agent=user_agent or _default_user_agent(),
             retry=retry or RetryConfig(),
+            api_key=api_key,
         )
         cache_impl = _build_cache(cache)
         inner: Any = _CachingAsyncTransport(async_t, cache_impl) if cache_impl else async_t
