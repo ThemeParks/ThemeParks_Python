@@ -38,6 +38,16 @@
 
 ### Fixed
 
+- **A 429 could park the client for hours.** The transport honoured any
+  `Retry-After` up to `max_retries` times. That is right for a REST 429, which
+  asks for seconds, and wrong for a history 429: that budget is hourly, so a
+  spent one can ask for most of an hour, and three of those is roughly two and
+  a half hours of a silent process. `RetryConfig` gains `max_retry_after`
+  (120s by default): past it the client does not sleep at all and raises
+  `RateLimitError` with `retry_after` set. Without this `BudgetExhaustedError`
+  was unreachable in practice, because the transport rode out the wait before
+  the history layer ever saw the 429.
+
 - **The client had no way to send an API key.** There was no `api_key`
   parameter anywhere, and the transport sent only `user-agent` and `accept`,
   so every request this SDK made was anonymous: the lowest rate limit and the

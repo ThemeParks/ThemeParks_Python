@@ -93,7 +93,7 @@ Both `ThemeParks` and `AsyncThemeParks` take the same keyword-only options:
 | `api_key`    | `str \| None`                            | `None`                               | Sent as the `x-api-key` header. Needed for anything beyond the free tier: deeper history, higher rate limits. |
 | `user_agent` | `str \| None`                            | `themeparks-sdk-py/<version>`        | Sent as the `User-Agent` header. Set this to identify your app. |
 | `timeout`    | `float` (seconds)                        | `10.0`                               | Per-request timeout. |
-| `retry`      | `RetryConfig \| None`                    | `RetryConfig(max_retries=3, respect_429=True)` | Retry/backoff behavior. `max_retries` is N retries beyond the first attempt (so N+1 total calls). |
+| `retry`      | `RetryConfig \| None`                    | `RetryConfig(max_retries=3, respect_429=True, max_retry_after=120.0)` | Retry/backoff behavior. `max_retries` is N retries beyond the first attempt (so N+1 total calls). `max_retry_after` is the longest `Retry-After` the client will sleep through; past it you get `RateLimitError` instead of a silent wait. |
 | `cache`      | `Cache \| CacheConfig \| bool \| None`   | `True` (in-memory LRU)               | See **Caching** below. `False` disables caching entirely. |
 
 Example:
@@ -250,9 +250,10 @@ and you are on the cheap path without having to know the expensive one exists.
 
 **History has its own hourly budget**, separate from the per-minute rate limit.
 A large backfill will hit it, and the wait can be most of an hour because that
-is when the window rolls. Rather than block a process for that long, the SDK
-raises `BudgetExhaustedError` (a `RateLimitError`) once the server asks for
-more than `max_wait` seconds, carrying `retry_after` so you can checkpoint:
+is when the window rolls. The client will not sleep through that: past
+`retry.max_retry_after` (120s) it stops retrying, and the history layer turns
+the result into `BudgetExhaustedError` (a `RateLimitError`) carrying
+`retry_after`, so you can checkpoint and come back:
 
 ```python
 from themeparks import BudgetExhaustedError

@@ -399,3 +399,42 @@ class TestSpan:
         # wire says from/to. This pins that translation.
         assert "from=2021-07-03" in str(calls[-1])
         assert "to=2026-08-23" in str(calls[-1])
+
+
+class TestBudgetErrorIsReachableWithDefaults:
+    """The one that matters: the shipped retry config, not a test-only one.
+
+    Every other budget test in this file builds a client with retries turned
+    off, which is exactly how the original defect hid. With the defaults the
+    transport slept through the server's Retry-After three times before the
+    history layer ever saw the 429, so a spent budget cost about two and a
+    half hours of silence and BudgetExhaustedError was unreachable in
+    practice. Only `sleep` is substituted here - the retry policy under test
+    is the real one.
+    """
+
+    def _client(self, retry_after, slept):
+        def handler(request):
+            return httpx.Response(429, headers={"retry-after": retry_after}, json={})
+
+        tp = ThemeParks(transport=httpx.MockTransport(handler), cache=False)
+        tp.raw._t._sleep = slept.append
+        return tp
+
+    def test_a_spent_history_budget_raises_instead_of_sleeping(self):
+        slept: list[float] = []
+        tp = self._client("2700", slept)
+        with pytest.raises(BudgetExhaustedError) as caught:
+            list(tp.entity("park-1").history.days("2021-07-03", "2026-08-23"))
+        assert slept == [], "the SDK slept through a 45 minute budget wait"
+        assert caught.value.retry_after == 2700.0
+
+    def test_an_ordinary_rest_429_is_still_ridden_out(self):
+        # The cap must not turn every 429 into an error. A REST limit asks for
+        # seconds, and retrying is the right answer.
+        slept: list[float] = []
+        tp = self._client("2", slept)
+        with pytest.raises(RateLimitError) as caught:
+            list(tp.entity("park-1").history.days("2026-09-01", "2026-09-02"))
+        assert not isinstance(caught.value, BudgetExhaustedError)
+        assert slept == [2.0, 2.0, 2.0]
