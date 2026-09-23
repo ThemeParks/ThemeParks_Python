@@ -1,5 +1,81 @@
 # Changelog
 
+## [3.1.0] - 2026-09-23
+
+### Added
+
+- **History.** `tp.entity(id).history` reads the archive, and pages for you:
+
+  ```python
+  with ThemeParks(api_key=KEY) as tp:
+      history = tp.entity(DISNEYLAND).history
+      span = history.span()
+      for entity_id, row in history.days(span.archive_from, span.retrievable_through):
+          ...
+  ```
+
+  - `span()` returns `archive_from`, `recorded_to` and `retrievable_through`
+    in one shape. The underlying coverage documents do not: a park nests them
+    under `summary`, an entity carries them at the top level under different
+    names, so without this every caller writes that branch first.
+    `retrievable_through` is the end date to bound a backfill by, because it
+    is what the key may read rather than what the archive holds.
+  - `days(start, end)` yields `(entity id, row)` for one summary row per
+    park-local day; `changes(date)` yields every recorded observation.
+    Both follow the server's paging links to the end and yield as they go, so
+    a resort's five years never has to be in memory at once.
+  - Given a park id, both use the park-level call, which answers every entity
+    in the park in one request. The same data fetched ride by ride is around a
+    hundred times more calls against the same budget.
+  - `BudgetExhaustedError` (a `RateLimitError`) is raised when the history
+    budget is spent and the server asks for a longer wait than `max_wait`
+    (120s by default). It carries `retry_after`, so a backfill can checkpoint
+    and resume rather than hold a process open for most of an hour.
+
+- **`examples/backfill.py`** — a complete backfill with resume and NDJSON or
+  CSV output. It pulls Disneyland Resort's whole daily archive, 98,452 rows,
+  in one run.
+
+### Fixed
+
+- **A 429 could park the client for hours.** The transport honoured any
+  `Retry-After` up to `max_retries` times. That is right for a REST 429, which
+  asks for seconds, and wrong for a history 429: that budget is hourly, so a
+  spent one can ask for most of an hour, and three of those is roughly two and
+  a half hours of a silent process. `RetryConfig` gains `max_retry_after`
+  (120s by default): past it the client does not sleep at all and raises
+  `RateLimitError` with `retry_after` set. Without this `BudgetExhaustedError`
+  was unreachable in practice, because the transport rode out the wait before
+  the history layer ever saw the 429.
+
+- **The user agent announced the wrong version.** `PACKAGE_VERSION` was a
+  literal reading `2.0.0` in a package at `3.1.0`, so every request this SDK
+  has made since 3.0.0 named a version two majors old, and nothing anywhere
+  failed. It is now read from the installed package metadata, which cannot
+  drift, and a gate test pins it to `pyproject.toml` and to the `User-Agent`
+  the transport builds.
+
+- **The client had no way to send an API key.** There was no `api_key`
+  parameter anywhere, and the transport sent only `user-agent` and `accept`,
+  so every request this SDK made was anonymous: the lowest rate limit and the
+  most recent seven days of history, whatever the caller had paid for. A
+  paying customer had to drop to raw `httpx` to use their own plan.
+  `ThemeParks(api_key=...)` and `AsyncThemeParks(api_key=...)` now send
+  `x-api-key`. An empty string is treated as no key, because an unset
+  environment variable arrives as `""` far more often than as `None`, and
+  sending an empty key is a 401 rather than an anonymous request.
+
+- **The model generator was silently under-patching every documented class.**
+  `scripts/regenerate.py` restores nullability that `datamodel-code-generator`
+  drops, by matching the field line inside its class. The pattern could not
+  cross the blank line after a class docstring, so it matched only classes
+  without one and left every documented class unpatched, printing a warning
+  nobody read. That included `next` on all four history envelopes, which is
+  null on the last page of every paged response, so the SDK would have failed
+  to parse the page that ends a backfill. The pattern now spans blank lines,
+  an unmatched patch is a hard failure rather than a warning, and the 22
+  fields the spec marks both required and nullable are all listed.
+
 ## [3.0.0] - 2026-09-08
 
 ### Fixed

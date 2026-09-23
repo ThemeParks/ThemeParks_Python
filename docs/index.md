@@ -15,6 +15,7 @@ pip install themeparks
 ## Where to go next
 
 - [Quickstart](quickstart.md) — install, print wait times sync & async.
-- [Cookbook](cookbook.md) — three complete recipes you can copy and run.
+- [Cookbook](cookbook.md) — complete recipes you can copy and run, including
+  backfilling a park's whole history.
 - [API reference](api/client.md) — every public class and helper, generated
   from docstrings.

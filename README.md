@@ -90,22 +90,30 @@ Both `ThemeParks` and `AsyncThemeParks` take the same keyword-only options:
 | Option       | Type                                     | Default                              | Purpose |
 |--------------|------------------------------------------|--------------------------------------|---------|
 | `base_url`   | `str`                                    | `https://api.themeparks.wiki/v1`     | API base URL (point at a mock / staging if you need to). |
+| `api_key`    | `str \| None`                            | `None`                               | Sent as the `x-api-key` header. Needed for anything beyond the free tier: deeper history, higher rate limits. |
 | `user_agent` | `str \| None`                            | `themeparks-sdk-py/<version>`        | Sent as the `User-Agent` header. Set this to identify your app. |
 | `timeout`    | `float` (seconds)                        | `10.0`                               | Per-request timeout. |
-| `retry`      | `RetryConfig \| None`                    | `RetryConfig(max_retries=3, respect_429=True)` | Retry/backoff behavior. `max_retries` is N retries beyond the first attempt (so N+1 total calls). |
+| `retry`      | `RetryConfig \| None`                    | `RetryConfig(max_retries=3, respect_429=True, max_retry_after=120.0)` | Retry/backoff behavior. `max_retries` is N retries beyond the first attempt (so N+1 total calls). `max_retry_after` is the longest `Retry-After` the client will sleep through; past it you get `RateLimitError` instead of a silent wait. |
 | `cache`      | `Cache \| CacheConfig \| bool \| None`   | `True` (in-memory LRU)               | See **Caching** below. `False` disables caching entirely. |
 
 Example:
 
 ```python
+import os
+
 from themeparks import ThemeParks, RetryConfig
 
 tp = ThemeParks(
+    api_key=os.environ["THEMEPARKS_API_KEY"],
     user_agent="my-app/1.2.3 (+https://example.com)",
     timeout=15.0,
     retry=RetryConfig(max_retries=5, respect_429=True),
 )
 ```
+
+Without a key you get the anonymous tier: the most recent seven days of
+history and the lowest rate limit. Keys are issued from your account at
+[api.themeparks.wiki](https://api.themeparks.wiki).
 
 ## Ergonomic helpers
 
@@ -207,6 +215,61 @@ remaining keys are whatever fields that variant carries.
 `parse_api_datetime(value, timezone)` parses any API date/time string into a
 timezone-aware `datetime`, honoring the entity's IANA timezone for naive
 inputs.
+
+## History
+
+`tp.entity(id).history` reads the archive. Both methods page for you and yield
+rows as they arrive, so a resort's five years never has to fit in memory.
+
+```python
+from themeparks import ThemeParks
+
+DISNEYLAND = "7340550b-c14d-4def-80bb-acdb51d49a66"
+
+with ThemeParks(api_key=KEY) as tp:
+    history = tp.entity(DISNEYLAND).history
+
+    # What exists, and what your key may read. Same three fields whether the
+    # id is a park or a single ride.
+    span = history.span()
+    print(span.archive_from, span.recorded_to, span.retrievable_through)
+
+    # One summary row per park-local day, as (entity id, row).
+    for entity_id, row in history.days(span.archive_from, span.retrievable_through):
+        print(row.date, entity_id, row.operatingMinutes, row.standby.p50 if row.standby else None)
+
+    # Every recorded change on one day.
+    for entity_id, row in history.changes("2026-09-20"):
+        print(row.time, entity_id, row.status)
+```
+
+**Ask the park, not the rides.** Both history endpoints answer every entity in
+a park in one request. Pulling the same data ride by ride is around a hundred
+times more calls for a large resort, against the same budget. Pass a park id
+and you are on the cheap path without having to know the expensive one exists.
+
+**History has its own hourly budget**, separate from the per-minute rate limit.
+A large backfill will hit it, and the wait can be most of an hour because that
+is when the window rolls. The client will not sleep through that: past
+`retry.max_retry_after` (120s) it stops retrying, and the history layer turns
+the result into `BudgetExhaustedError` (a `RateLimitError`) carrying
+`retry_after`, so you can checkpoint and come back:
+
+```python
+from themeparks import BudgetExhaustedError
+
+try:
+    for entity_id, row in history.days(start, end):
+        write(entity_id, row)
+        last_day = row.date
+except BudgetExhaustedError as exc:
+    checkpoint(last_day)
+    print(f"resume in {exc.retry_after:.0f}s")
+```
+
+A complete backfill script with resume and CSV output is in
+[`examples/backfill.py`](examples/backfill.py); it pulls Disneyland Resort's
+whole daily archive, 98,452 rows, in one run.
 
 ## Low-level escape hatch
 

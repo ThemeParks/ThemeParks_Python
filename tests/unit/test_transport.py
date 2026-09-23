@@ -168,3 +168,61 @@ def test_parse_body_malformed_json_returns_none():
 
     r = httpx.Response(200, content=b"{not json", headers={"content-type": "application/json"})
     assert _parse_body(r) is None
+
+
+class TestRetryAfterCap:
+    """A history 429 asks for most of an hour. We do not sleep through it.
+
+    Before this cap the transport honoured any Retry-After up to max_retries
+    times, so a spent history budget parked the process for roughly two and a
+    half hours with no output. That is indistinguishable from a hang, and it
+    made BudgetExhaustedError - the whole point of which is to let a backfill
+    checkpoint instead of blocking - effectively unreachable.
+    """
+
+    def _transport(self, slept, calls, retry):
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(request.url)
+            headers = {} if self.retry_after is None else {"retry-after": self.retry_after}
+            return httpx.Response(429, headers=headers, json={})
+
+        client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://x/v1")
+        return SyncTransport(
+            client=client,
+            base_url="https://x/v1",
+            user_agent="test/1",
+            retry=retry,
+            sleep=slept.append,
+        )
+
+    def _run(self, retry_after, retry=None):
+        self.retry_after = retry_after
+        slept: list[float] = []
+        calls: list[object] = []
+        transport = self._transport(slept, calls, retry or RetryConfig())
+        with pytest.raises(RateLimitError) as caught:
+            transport.get("/anything")
+        return caught.value, slept, calls
+
+    def test_a_long_wait_is_not_slept_through(self):
+        error, slept, calls = self._run("3000")
+        assert slept == []
+        assert len(calls) == 1
+        # The caller still gets the number, so it can schedule its own return.
+        assert error.retry_after == 3000.0
+
+    def test_a_short_wait_is_still_honoured(self):
+        _, slept, calls = self._run("5")
+        assert slept == [5.0, 5.0, 5.0]
+        assert len(calls) == 4
+
+    def test_the_cap_is_configurable(self):
+        _, slept, _ = self._run("3000", RetryConfig(max_retry_after=3600.0))
+        assert slept == [3000.0, 3000.0, 3000.0]
+
+    def test_no_retry_after_header_still_backs_off(self):
+        # The cap is about the server's stated wait. With no header we fall
+        # back to our own backoff, which was never the problem.
+        _, slept, _ = self._run(None)
+        assert len(slept) == 3
+        assert all(s > 0 for s in slept)

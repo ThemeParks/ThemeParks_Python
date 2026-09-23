@@ -58,6 +58,7 @@ nav:
   - API reference:
     - Client: api/client.md
     - Entity: api/entity.md
+    - History: api/history.md
     - Destinations: api/destinations.md
     - Raw client: api/raw.md
     - Helpers: api/helpers.md

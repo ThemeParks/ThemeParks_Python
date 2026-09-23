@@ -113,6 +113,3 @@ for the full set.
     options:
       heading_level: 3
 
-::: themeparks._generated.models.TagData
-    options:
-      heading_level: 3

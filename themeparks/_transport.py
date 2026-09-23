@@ -24,6 +24,15 @@ _ERROR_MESSAGE_LIMIT = 300
 class RetryConfig:
     max_retries: int = 3
     respect_429: bool = True
+    #: Longest `Retry-After` this client will sleep through, in seconds.
+    #:
+    #: A REST 429 asks for seconds and is worth waiting out. A HISTORY 429 is
+    #: a different animal: that budget is hourly, so a spent one can ask for
+    #: most of an hour, and honouring it up to `max_retries` times means a
+    #: process that sits silent for hours and looks hung. Past this cap we do
+    #: not sleep at all, and raise `RateLimitError` carrying `retry_after` so
+    #: the caller can checkpoint and come back.
+    max_retry_after: float = 120.0
 
 
 def _parse_retry_after(raw: str | None) -> float | None:
@@ -38,6 +47,11 @@ def _parse_retry_after(raw: str | None) -> float | None:
         return max(0.0, parsed.timestamp() - time.time())
     except Exception:
         return None
+
+
+def _wait_too_long(retry_after: float | None, retry: RetryConfig) -> bool:
+    """True when the server's wait is longer than this client will sleep for."""
+    return retry_after is not None and retry_after > retry.max_retry_after
 
 
 def _backoff(attempt: int) -> float:
@@ -77,20 +91,39 @@ def _parse_body(response: httpx.Response) -> Any:
         return None
 
 
+def _headers(user_agent: str, api_key: str | None) -> dict[str, str]:
+    """Request headers, with the API key when one was supplied.
+
+    The SDK could not send a key at all until 2026-09-23, which meant the
+    official library could reach only the anonymous window: seven days of
+    history and the unauthenticated rate limit. A paying customer had to drop
+    to raw HTTP to use what they had bought.
+
+    `x-api-key` is the header the API documents. Nothing here logs or repeats
+    the value.
+    """
+    headers = {"user-agent": user_agent, "accept": "application/json"}
+    if api_key:
+        headers["x-api-key"] = api_key
+    return headers
+
+
 class SyncTransport:
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         *,
         client: httpx.Client,
         base_url: str,
         user_agent: str,
         retry: RetryConfig,
+        api_key: str | None = None,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self._client = client
         self._base_url = base_url.rstrip("/")
         self._user_agent = user_agent
         self._retry = retry
+        self._headers = _headers(user_agent, api_key)
         self._sleep = sleep
 
     def get(self, path: str) -> Any:
@@ -100,7 +133,7 @@ class SyncTransport:
             try:
                 response = self._client.get(
                     path,
-                    headers={"user-agent": self._user_agent, "accept": "application/json"},
+                    headers=self._headers,
                 )
             except httpx.TimeoutException as exc:
                 raise TimeoutError(f"request to {url} timed out") from exc
@@ -117,13 +150,14 @@ class SyncTransport:
             body = _parse_body(response)
             status = response.status_code
 
+            retry_after = _parse_retry_after(response.headers.get("retry-after"))
             if (
                 status == _STATUS_TOO_MANY_REQUESTS
                 and self._retry.respect_429
                 and attempt < self._retry.max_retries
+                and not _wait_too_long(retry_after, self._retry)
             ):
-                ra = _parse_retry_after(response.headers.get("retry-after"))
-                self._sleep(ra if ra is not None else _backoff(attempt))
+                self._sleep(retry_after if retry_after is not None else _backoff(attempt))
                 attempt += 1
                 continue
             if status == _STATUS_TOO_MANY_REQUESTS:
@@ -132,7 +166,7 @@ class SyncTransport:
                     status=status,
                     body=body,
                     url=url,
-                    retry_after=_parse_retry_after(response.headers.get("retry-after")),
+                    retry_after=retry_after,
                 )
             if status >= _STATUS_SERVER_ERROR and attempt < self._retry.max_retries:
                 self._sleep(_backoff(attempt))
@@ -147,19 +181,21 @@ class SyncTransport:
 
 
 class AsyncTransport:
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         *,
         client: httpx.AsyncClient,
         base_url: str,
         user_agent: str,
         retry: RetryConfig,
+        api_key: str | None = None,
         sleep: Callable[..., Awaitable[None]] | None = None,
     ) -> None:
         self._client = client
         self._base_url = base_url.rstrip("/")
         self._user_agent = user_agent
         self._retry = retry
+        self._headers = _headers(user_agent, api_key)
         self._sleep: Callable[..., Awaitable[None]] = sleep if sleep is not None else asyncio.sleep
 
     async def get(self, path: str) -> Any:
@@ -169,7 +205,7 @@ class AsyncTransport:
             try:
                 response = await self._client.get(
                     path,
-                    headers={"user-agent": self._user_agent, "accept": "application/json"},
+                    headers=self._headers,
                 )
             except httpx.TimeoutException as exc:
                 raise TimeoutError(f"request to {url} timed out") from exc
@@ -186,13 +222,14 @@ class AsyncTransport:
             body = _parse_body(response)
             status = response.status_code
 
+            retry_after = _parse_retry_after(response.headers.get("retry-after"))
             if (
                 status == _STATUS_TOO_MANY_REQUESTS
                 and self._retry.respect_429
                 and attempt < self._retry.max_retries
+                and not _wait_too_long(retry_after, self._retry)
             ):
-                ra = _parse_retry_after(response.headers.get("retry-after"))
-                await self._sleep(ra if ra is not None else _backoff(attempt))
+                await self._sleep(retry_after if retry_after is not None else _backoff(attempt))
                 attempt += 1
                 continue
             if status == _STATUS_TOO_MANY_REQUESTS:
@@ -201,7 +238,7 @@ class AsyncTransport:
                     status=status,
                     body=body,
                     url=url,
-                    retry_after=_parse_retry_after(response.headers.get("retry-after")),
+                    retry_after=retry_after,
                 )
             if status >= _STATUS_SERVER_ERROR and attempt < self._retry.max_retries:
                 await self._sleep(_backoff(attempt))

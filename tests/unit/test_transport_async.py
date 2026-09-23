@@ -109,3 +109,49 @@ async def test_async_retries_network_error_then_succeeds():
     t = make_transport(handler, retry_max=3)
     assert await t.get("/x") == {"ok": True}
     assert calls["n"] == 2
+
+
+class TestRetryAfterCapAsync:
+    """The async transport must cap the same way. See the sync sibling.
+
+    An async backfill that sleeps for most of an hour inside a single await is
+    worse than the sync one, not better: it holds the task and gives the event
+    loop nothing to say about it.
+    """
+
+    def _run_setup(self, retry_after, retry):
+        slept: list[float] = []
+        calls: list[object] = []
+
+        async def sleep(seconds):
+            slept.append(seconds)
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(request.url)
+            headers = {} if retry_after is None else {"retry-after": retry_after}
+            return httpx.Response(429, headers=headers, json={})
+
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="https://x/v1")
+        transport = AsyncTransport(
+            client=client,
+            base_url="https://x/v1",
+            user_agent="test/1",
+            retry=retry,
+            sleep=sleep,
+        )
+        return transport, slept, calls
+
+    async def test_a_long_wait_is_not_slept_through(self):
+        transport, slept, calls = self._run_setup("3000", RetryConfig())
+        with pytest.raises(RateLimitError) as caught:
+            await transport.get("/anything")
+        assert slept == []
+        assert len(calls) == 1
+        assert caught.value.retry_after == 3000.0
+
+    async def test_a_short_wait_is_still_honoured(self):
+        transport, slept, calls = self._run_setup("5", RetryConfig())
+        with pytest.raises(RateLimitError):
+            await transport.get("/anything")
+        assert slept == [5.0, 5.0, 5.0]
+        assert len(calls) == 4

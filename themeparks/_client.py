@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from importlib import metadata
 from typing import Any, Callable
 
 import httpx
@@ -13,7 +14,23 @@ from themeparks._raw import AsyncRawClient, RawClient
 from themeparks._transport import AsyncTransport, RetryConfig, SyncTransport
 
 DEFAULT_BASE_URL = "https://api.themeparks.wiki/v1"
-PACKAGE_VERSION = "2.0.0"
+
+
+def _package_version() -> str:
+    """Read the installed version rather than restating it.
+
+    This was a literal, and it said 2.0.0 in a package at 3.1.0: every request
+    the SDK made announced a version two majors old, and nothing failed. A
+    literal only stays right while someone remembers to change it, and nobody
+    did across two releases.
+    """
+    try:
+        return metadata.version("themeparks")
+    except metadata.PackageNotFoundError:  # running from a source tree
+        return "0+unknown"
+
+
+PACKAGE_VERSION = _package_version()
 
 
 def _default_user_agent() -> str:
@@ -89,6 +106,7 @@ class ThemeParks:
         retry: RetryConfig | None = None,
         cache: Cache | bool | CacheConfig | None = None,
         transport: httpx.BaseTransport | None = None,
+        api_key: str | None = None,
     ) -> None:
         self._client = httpx.Client(base_url=base_url, timeout=timeout, transport=transport)
         sync_t = SyncTransport(
@@ -96,6 +114,7 @@ class ThemeParks:
             base_url=base_url,
             user_agent=user_agent or _default_user_agent(),
             retry=retry or RetryConfig(),
+            api_key=api_key,
         )
         cache_impl = _build_cache(cache)
         inner: Any = _CachingSyncTransport(sync_t, cache_impl) if cache_impl else sync_t
@@ -146,6 +165,7 @@ class AsyncThemeParks:
         retry: RetryConfig | None = None,
         cache: Cache | bool | CacheConfig | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
+        api_key: str | None = None,
     ) -> None:
         self._client = httpx.AsyncClient(base_url=base_url, timeout=timeout, transport=transport)
         async_t = AsyncTransport(
@@ -153,6 +173,7 @@ class AsyncThemeParks:
             base_url=base_url,
             user_agent=user_agent or _default_user_agent(),
             retry=retry or RetryConfig(),
+            api_key=api_key,
         )
         cache_impl = _build_cache(cache)
         inner: Any = _CachingAsyncTransport(async_t, cache_impl) if cache_impl else async_t

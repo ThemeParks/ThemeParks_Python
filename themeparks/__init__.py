@@ -1,6 +1,7 @@
 from themeparks._cache import Cache, CacheConfig, InMemoryLRUCache
 from themeparks._client import AsyncThemeParks, ThemeParks
 from themeparks._ergonomic.dates import parse_api_datetime
+from themeparks._ergonomic.history import BudgetExhaustedError, HistorySpan
 from themeparks._ergonomic.live import current_wait_time, iter_queues
 from themeparks._errors import (
     APIError,
@@ -14,6 +15,8 @@ from themeparks._transport import RetryConfig
 __all__ = [
     "APIError",
     "AsyncThemeParks",
+    "BudgetExhaustedError",
+    "HistorySpan",
     "Cache",
     "CacheConfig",
     "InMemoryLRUCache",

@@ -6,6 +6,7 @@ import asyncio
 from collections.abc import AsyncIterator, Iterator
 from datetime import date
 
+from themeparks._ergonomic.history import AsyncHistoryApi, HistoryApi
 from themeparks._generated.models import (
     EntityChild,
     EntityChildrenResponse,
@@ -76,6 +77,7 @@ class EntityHandle:
         self._raw = raw
         self.entity_id = entity_id
         self.schedule = _ScheduleApi(raw, entity_id)
+        self.history = HistoryApi(raw, entity_id)
 
     def get(self) -> EntityData:
         return self._raw.get_entity(self.entity_id)
@@ -143,6 +145,7 @@ class AsyncEntityHandle:
         self._raw = raw
         self.entity_id = entity_id
         self.schedule = _AsyncScheduleApi(raw, entity_id)
+        self.history = AsyncHistoryApi(raw, entity_id)
 
     async def get(self) -> EntityData:
         return await self._raw.get_entity(self.entity_id)
