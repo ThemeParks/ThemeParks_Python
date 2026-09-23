@@ -48,6 +48,13 @@
   was unreachable in practice, because the transport rode out the wait before
   the history layer ever saw the 429.
 
+- **The user agent announced the wrong version.** `PACKAGE_VERSION` was a
+  literal reading `2.0.0` in a package at `3.1.0`, so every request this SDK
+  has made since 3.0.0 named a version two majors old, and nothing anywhere
+  failed. It is now read from the installed package metadata, which cannot
+  drift, and a gate test pins it to `pyproject.toml` and to the `User-Agent`
+  the transport builds.
+
 - **The client had no way to send an API key.** There was no `api_key`
   parameter anywhere, and the transport sent only `user-agent` and `accept`,
   so every request this SDK made was anonymous: the lowest rate limit and the

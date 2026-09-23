@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from importlib import metadata
 from typing import Any, Callable
 
 import httpx
@@ -13,7 +14,23 @@ from themeparks._raw import AsyncRawClient, RawClient
 from themeparks._transport import AsyncTransport, RetryConfig, SyncTransport
 
 DEFAULT_BASE_URL = "https://api.themeparks.wiki/v1"
-PACKAGE_VERSION = "2.0.0"
+
+
+def _package_version() -> str:
+    """Read the installed version rather than restating it.
+
+    This was a literal, and it said 2.0.0 in a package at 3.1.0: every request
+    the SDK made announced a version two majors old, and nothing failed. A
+    literal only stays right while someone remembers to change it, and nobody
+    did across two releases.
+    """
+    try:
+        return metadata.version("themeparks")
+    except metadata.PackageNotFoundError:  # running from a source tree
+        return "0+unknown"
+
+
+PACKAGE_VERSION = _package_version()
 
 
 def _default_user_agent() -> str:
