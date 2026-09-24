@@ -91,6 +91,7 @@ Both `ThemeParks` and `AsyncThemeParks` take the same keyword-only options:
 |--------------|------------------------------------------|--------------------------------------|---------|
 | `base_url`   | `str`                                    | `https://api.themeparks.wiki/v1`     | API base URL (point at a mock / staging if you need to). |
 | `api_key`    | `str \| None`                            | `None`                               | Sent as the `x-api-key` header. Needed for anything beyond the free tier: deeper history, higher rate limits. |
+| `rate_limit` | read-only                                | —                                    | What the server last said about your budgets. See **Rate limits** below. |
 | `user_agent` | `str \| None`                            | `themeparks-sdk-py/<version>`        | Sent as the `User-Agent` header. Set this to identify your app. |
 | `timeout`    | `float` (seconds)                        | `10.0`                               | Per-request timeout. |
 | `retry`      | `RetryConfig \| None`                    | `RetryConfig(max_retries=3, respect_429=True, max_retry_after=120.0)` | Retry/backoff behavior. `max_retries` is N retries beyond the first attempt (so N+1 total calls). `max_retry_after` is the longest `Retry-After` the client will sleep through; past it you get `RateLimitError` instead of a silent wait. |
@@ -215,6 +216,39 @@ remaining keys are whatever fields that variant carries.
 `parse_api_datetime(value, timezone)` parses any API date/time string into a
 timezone-aware `datetime`, honoring the entity's IANA timezone for naive
 inputs.
+
+## Rate limits
+
+The API meters requests per minute, and history requests again per hour. Both
+are advertised on every response that can carry them, and the client reads
+them:
+
+```python
+with ThemeParks(api_key=KEY) as tp:
+    tp.entity(park_id).live()
+
+    print(tp.rate_limit.rest.remaining)          # 299
+    print(tp.rate_limit.rest.seconds_until_reset())
+    print(tp.rate_limit.history.remaining)       # on a history call
+```
+
+**`None` means the server did not say, never "nothing left".** An unmetered
+plan advertises no figures, and neither does a publicly cacheable response,
+because the numbers are per-caller and a shared cache would hand one caller's
+budget to another. In practice that means anonymous calls carry no figures;
+calls made with a key do. Use `.exhausted`, which is true only when the server
+actually said zero.
+
+The client also acts on what it reads. When a response says the window is
+spent, the next request waits for the advertised reset rather than sending a
+request that is certain to be refused, and to cost a unit of budget being
+refused. Turn that off with `RetryConfig(respect_remaining=False)`.
+
+**A 429 is held once for the whole client.** The wait belongs to the caller,
+not to whichever request happened to meet it, so it goes on a shared gate with
+a little jitter. Without that, ten concurrent requests each sleep their own
+copy of `Retry-After` and then all retry at the same instant, re-tripping the
+limit together.
 
 ## History
 

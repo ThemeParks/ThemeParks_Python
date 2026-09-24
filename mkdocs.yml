@@ -59,6 +59,7 @@ nav:
     - Client: api/client.md
     - Entity: api/entity.md
     - History: api/history.md
+    - Rate limits: api/ratelimits.md
     - Destinations: api/destinations.md
     - Raw client: api/raw.md
     - Helpers: api/helpers.md

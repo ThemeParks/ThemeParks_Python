@@ -213,12 +213,17 @@ class TestRetryAfterCap:
 
     def test_a_short_wait_is_still_honoured(self):
         _, slept, calls = self._run("5")
-        assert slept == [5.0, 5.0, 5.0]
+        # Jittered: the gate is shared, so without a little spread every
+        # waiter would wake at the same instant and re-trip the limit
+        # together. One wait per retry, taken once, never doubled.
+        assert len(slept) == 3
+        assert all(5.0 <= s < 5.3 for s in slept), slept
         assert len(calls) == 4
 
     def test_the_cap_is_configurable(self):
         _, slept, _ = self._run("3000", RetryConfig(max_retry_after=3600.0))
-        assert slept == [3000.0, 3000.0, 3000.0]
+        assert len(slept) == 3
+        assert all(3000.0 <= s < 3000.3 for s in slept), slept
 
     def test_no_retry_after_header_still_backs_off(self):
         # The cap is about the server's stated wait. With no header we fall

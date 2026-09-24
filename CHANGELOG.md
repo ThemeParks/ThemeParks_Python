@@ -1,5 +1,44 @@
 # Changelog
 
+## [3.2.0] - 2026-09-24
+
+### Added
+
+- **The client reads the rate-limit headers, and acts on them.** Both meters,
+  the per-minute REST one and the separate hourly history budget, are exposed
+  on `client.rate_limit`:
+
+  ```python
+  tp.rate_limit.rest.remaining          # 299
+  tp.rate_limit.history.remaining       # on a history call
+  tp.rate_limit.rest.seconds_until_reset()
+  ```
+
+  Every field is optional, and `None` means the server did not say rather than
+  "nothing left". An unmetered plan advertises nothing, and neither does a
+  publicly cacheable response, because the figures are per-caller. Use
+  `.exhausted`, which is true only when the server said zero. `reset` is a
+  relative countdown frozen when it was read, so `seconds_until_reset()` ages
+  it rather than returning a stale number.
+
+  When a response says the window is spent, the next request now waits for the
+  advertised reset instead of sending one that is certain to be refused, and to
+  spend a unit of budget being refused. `RetryConfig(respect_remaining=False)`
+  turns it off.
+
+  The server only started publishing the hourly history budget on 2026-09-24;
+  before that there was nothing on the wire to read.
+
+### Fixed
+
+- **A 429 was waited out once per in-flight request.** The wait belongs to the
+  caller, not to whichever request met it, so ten concurrent requests each
+  slept their own `Retry-After` and then retried at the same instant,
+  re-tripping the limit together. It is now taken once, on a gate shared by the
+  whole client, with a little jitter so the waiters do not wake in unison. A
+  shorter wait arriving while a longer one is in force no longer brings the
+  gate forward.
+
 ## [3.1.0] - 2026-09-23
 
 ### Added

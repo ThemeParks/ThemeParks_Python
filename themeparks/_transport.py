@@ -13,6 +13,7 @@ from typing import Any
 import httpx
 
 from themeparks._errors import APIError, NetworkError, RateLimitError, TimeoutError
+from themeparks._ratelimit import Gate, RateLimits, read_rate_limits
 
 _STATUS_TOO_MANY_REQUESTS = 429
 _STATUS_SERVER_ERROR = 500
@@ -33,6 +34,13 @@ class RetryConfig:
     #: not sleep at all, and raise `RateLimitError` carrying `retry_after` so
     #: the caller can checkpoint and come back.
     max_retry_after: float = 120.0
+    #: Wait out a window the server has already told us is spent.
+    #:
+    #: When a response says `remaining: 0`, the next request is a guaranteed
+    #: 429 that also costs us a unit of the caller's budget to refuse. Waiting
+    #: for the reset it advertised is strictly better than sending it. Off
+    #: turns the client back into a purely reactive one.
+    respect_remaining: bool = True
 
 
 def _parse_retry_after(raw: str | None) -> float | None:
@@ -125,11 +133,43 @@ class SyncTransport:
         self._retry = retry
         self._headers = _headers(user_agent, api_key)
         self._sleep = sleep
+        self.rate_limit = RateLimits()
+        self._gate = Gate()
+
+    def _hold(self) -> None:
+        """Wait before sending, if we already know this request would fail.
+
+        Two reasons to hold, and they are different. The GATE is a 429 the
+        server has already issued to this caller: the wait belongs to them,
+        not to whichever request met it, so it is shared and taken once. The
+        REMAINING check is a window the server told us is spent -- sending
+        into it is a guaranteed 429 that also costs a unit of budget to
+        refuse, so waiting for the advertised reset is strictly better.
+
+        A remaining we were never told is not a spent one. Anonymous
+        responses carry no figures at all, so an unknown must never hold.
+        """
+        wait = self._gate.wait_seconds()
+        if wait > 0:
+            self._sleep(wait)
+        if not self._retry.respect_remaining:
+            return
+        for meter in (self.rate_limit.rest, self.rate_limit.history):
+            if not meter.exhausted:
+                continue
+            left = meter.seconds_until_reset()
+            if left is None or left <= 0 or left > self._retry.max_retry_after:
+                # Past the cap we do not sit on it: the caller gets the 429
+                # and its Retry-After, and can decide. Same rule the retry
+                # path follows.
+                continue
+            self._sleep(left)
 
     def get(self, path: str) -> Any:
         url = self._base_url + path
         attempt = 0
         while True:
+            self._hold()
             try:
                 response = self._client.get(
                     path,
@@ -144,6 +184,8 @@ class SyncTransport:
                     continue
                 raise NetworkError(f"network error calling {url}") from exc
 
+            self.rate_limit = read_rate_limits(response.headers, self.rate_limit)
+
             if response.is_success:
                 return _parse_body(response)
 
@@ -153,11 +195,28 @@ class SyncTransport:
             retry_after = _parse_retry_after(response.headers.get("retry-after"))
             if (
                 status == _STATUS_TOO_MANY_REQUESTS
+                and retry_after is not None
+                and not _wait_too_long(retry_after, self._retry)
+            ):
+                # The wait belongs to the CALLER, not to whichever request met
+                # it, so it goes on the shared gate and _hold() serves it once.
+                #
+                # Past the cap the gate is left OPEN on purpose: we raise
+                # instead, and blocking the caller's next call for most of an
+                # hour is the opposite of letting them checkpoint and resume.
+                self._gate.close_for(retry_after)
+            if (
+                status == _STATUS_TOO_MANY_REQUESTS
                 and self._retry.respect_429
                 and attempt < self._retry.max_retries
                 and not _wait_too_long(retry_after, self._retry)
             ):
-                self._sleep(retry_after if retry_after is not None else _backoff(attempt))
+                # No sleep here: the gate above holds the wait and _hold()
+                # at the top of the loop serves it once. Paying it here too
+                # would double every backoff, and ten concurrent requests
+                # would each pay their own and then retry in unison.
+                if retry_after is None:
+                    self._sleep(_backoff(attempt))
                 attempt += 1
                 continue
             if status == _STATUS_TOO_MANY_REQUESTS:
@@ -197,11 +256,29 @@ class AsyncTransport:
         self._retry = retry
         self._headers = _headers(user_agent, api_key)
         self._sleep: Callable[..., Awaitable[None]] = sleep if sleep is not None else asyncio.sleep
+        self.rate_limit = RateLimits()
+        self._gate = Gate()
+
+    async def _hold(self) -> None:
+        """Asynchronous mirror of :meth:`SyncTransport._hold`."""
+        wait = self._gate.wait_seconds()
+        if wait > 0:
+            await self._sleep(wait)
+        if not self._retry.respect_remaining:
+            return
+        for meter in (self.rate_limit.rest, self.rate_limit.history):
+            if not meter.exhausted:
+                continue
+            left = meter.seconds_until_reset()
+            if left is None or left <= 0 or left > self._retry.max_retry_after:
+                continue
+            await self._sleep(left)
 
     async def get(self, path: str) -> Any:
         url = self._base_url + path
         attempt = 0
         while True:
+            await self._hold()
             try:
                 response = await self._client.get(
                     path,
@@ -216,6 +293,8 @@ class AsyncTransport:
                     continue
                 raise NetworkError(f"network error calling {url}") from exc
 
+            self.rate_limit = read_rate_limits(response.headers, self.rate_limit)
+
             if response.is_success:
                 return _parse_body(response)
 
@@ -225,11 +304,28 @@ class AsyncTransport:
             retry_after = _parse_retry_after(response.headers.get("retry-after"))
             if (
                 status == _STATUS_TOO_MANY_REQUESTS
+                and retry_after is not None
+                and not _wait_too_long(retry_after, self._retry)
+            ):
+                # The wait belongs to the CALLER, not to whichever request met
+                # it, so it goes on the shared gate and _hold() serves it once.
+                #
+                # Past the cap the gate is left OPEN on purpose: we raise
+                # instead, and blocking the caller's next call for most of an
+                # hour is the opposite of letting them checkpoint and resume.
+                self._gate.close_for(retry_after)
+            if (
+                status == _STATUS_TOO_MANY_REQUESTS
                 and self._retry.respect_429
                 and attempt < self._retry.max_retries
                 and not _wait_too_long(retry_after, self._retry)
             ):
-                await self._sleep(retry_after if retry_after is not None else _backoff(attempt))
+                # No sleep here: the gate above holds the wait and _hold()
+                # at the top of the loop serves it once. Paying it here too
+                # would double every backoff, and ten concurrent requests
+                # would each pay their own and then retry in unison.
+                if retry_after is None:
+                    await self._sleep(_backoff(attempt))
                 attempt += 1
                 continue
             if status == _STATUS_TOO_MANY_REQUESTS:
