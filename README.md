@@ -93,7 +93,7 @@ Both `ThemeParks` and `AsyncThemeParks` take the same keyword-only options:
 | `api_key`    | `str \| None`                            | `None`                               | Sent as the `x-api-key` header. Needed for anything beyond the free tier: deeper history, higher rate limits. |
 | `user_agent` | `str \| None`                            | `themeparks-sdk-py/<version>`        | Sent as the `User-Agent` header. Set this to identify your app. |
 | `timeout`    | `float` (seconds)                        | `10.0`                               | Per-request timeout. |
-| `retry`      | `RetryConfig \| None`                    | `RetryConfig(max_retries=3, respect_429=True, max_retry_after=120.0, respect_remaining=True)` | Retry/backoff behavior. `max_retries` is N retries beyond the first attempt (so N+1 total calls). `max_retry_after` is the longest `Retry-After` the client will sleep through; past it you get `RateLimitError` instead of a silent wait. |
+| `retry`      | `RetryConfig \| None`                    | `RetryConfig(max_retries=3, respect_429=True, max_retry_after=120.0, respect_remaining=True)` | Retry/backoff behavior. `max_retries` is N retries beyond the first attempt (so N+1 total calls). `max_retry_after` is the TOTAL the client will block for within one call, across both the shared 429 gate and any spent-window wait. Past a single `Retry-After` that long you get `RateLimitError` instead of a silent wait. |
 | `cache`      | `Cache \| CacheConfig \| bool \| None`   | `True` (in-memory LRU)               | See **Caching** below. `False` disables caching entirely. |
 
 Example:

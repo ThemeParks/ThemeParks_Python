@@ -220,10 +220,15 @@ class TestRetryAfterCap:
         assert all(5.0 <= s < 5.3 for s in slept), slept
         assert len(calls) == 4
 
-    def test_the_cap_is_configurable(self):
+    def test_the_cap_is_configurable_and_bounds_the_whole_call(self):
+        # This used to assert three sleeps of 3000s: 9000 seconds of blocking
+        # under a 3600s cap, because the cap was checked per leg and never
+        # against the total. The cap is a per-CALL budget now, so the sum is
+        # what it bounds.
         _, slept, _ = self._run("3000", RetryConfig(max_retry_after=3600.0))
-        assert len(slept) == 3
-        assert all(3000.0 <= s < 3000.3 for s in slept), slept
+        assert sum(slept) <= 3600.0 + 0.01, slept
+        assert slept, "stopped waiting altogether"
+        assert slept[0] >= 3000.0
 
     def test_no_retry_after_header_still_backs_off(self):
         # The cap is about the server's stated wait. With no header we fall

@@ -36,8 +36,11 @@
 - **Calls may now block before sending.** When the server has said your window
   is spent, or has issued a 429 that is still in force, the client waits rather
   than sending a request that is certain to be refused. A call that used to
-  return in 200ms can now take up to `retry.max_retry_after` (120s) first. Turn
-  the two halves off with `RetryConfig(respect_remaining=False)` and
+  return in 200ms can now take up to `retry.max_retry_after` (120s) first. That
+  is a TOTAL across the call, not per wait: the shared 429 gate and the
+  spent-window wait stack, and before the budget existed a 429 carrying both a
+  `Retry-After` and a spent window blocked for 180 seconds under a 120 second
+  cap. Turn the two halves off with `RetryConfig(respect_remaining=False)` and
   `RetryConfig(respect_429=False)`.
 
 ### Fixed

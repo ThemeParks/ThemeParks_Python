@@ -19,6 +19,8 @@ _STATUS_TOO_MANY_REQUESTS = 429
 _STATUS_SERVER_ERROR = 500
 _ERROR_BODY_EXCERPT_LIMIT = 200
 _ERROR_MESSAGE_LIMIT = 300
+#: Below this, a computed wait is floating-point residue rather than a wait.
+_MIN_SLEEP_SECONDS = 0.001
 
 
 @dataclass
@@ -136,8 +138,17 @@ class SyncTransport:
         self.rate_limit = RateLimits()
         self._gate = Gate()
 
-    def _hold(self) -> None:
+    def _hold(self, budget: float) -> float:
         """Wait before sending, if we already know this request would fail.
+
+        Returns how long it slept, so the caller can keep a running total. The
+        TOTAL is what `max_retry_after` bounds, not each leg: the gate wait and
+        the spent-window wait are both self-initiated holds, and they stack.
+        Measured before this budget existed: a 429 carrying `Retry-After: 5`
+        and `RateLimit-Reset: 60` slept 5 then 55, three times over -- 180
+        seconds inside one call whose cap was 120. Each leg was under the cap,
+        so the per-leg check never fired, and the promise the cap makes was
+        reachable around.
 
         Two reasons to hold, and they are different. The GATE is a 429 the
         server has already issued to this caller: the wait belongs to them,
@@ -149,11 +160,13 @@ class SyncTransport:
         A remaining we were never told is not a spent one. Anonymous
         responses carry no figures at all, so an unknown must never hold.
         """
-        wait = self._gate.wait_seconds()
-        if wait > 0:
+        spent = 0.0
+        wait = min(self._gate.wait_seconds(), budget)
+        if wait > _MIN_SLEEP_SECONDS:
             self._sleep(wait)
+            spent += wait
         if not self._retry.respect_remaining:
-            return
+            return spent
         for meter in (self.rate_limit.rest, self.rate_limit.history):
             if not meter.exhausted:
                 continue
@@ -163,13 +176,20 @@ class SyncTransport:
                 # and its Retry-After, and can decide. Same rule the retry
                 # path follows.
                 continue
+            left = min(left, budget - spent)
+            if left <= _MIN_SLEEP_SECONDS:
+                break
             self._sleep(left)
+            spent += left
+        return spent
 
     def get(self, path: str) -> Any:
         url = self._base_url + path
         attempt = 0
+        # One budget for the whole call, because that is what the cap promises.
+        budget = self._retry.max_retry_after
         while True:
-            self._hold()
+            budget -= self._hold(budget)
             try:
                 response = self._client.get(
                     path,
@@ -265,26 +285,34 @@ class AsyncTransport:
         self.rate_limit = RateLimits()
         self._gate = Gate()
 
-    async def _hold(self) -> None:
+    async def _hold(self, budget: float) -> float:
         """Asynchronous mirror of :meth:`SyncTransport._hold`."""
-        wait = self._gate.wait_seconds()
-        if wait > 0:
+        spent = 0.0
+        wait = min(self._gate.wait_seconds(), budget)
+        if wait > _MIN_SLEEP_SECONDS:
             await self._sleep(wait)
+            spent += wait
         if not self._retry.respect_remaining:
-            return
+            return spent
         for meter in (self.rate_limit.rest, self.rate_limit.history):
             if not meter.exhausted:
                 continue
             left = meter.seconds_until_reset()
             if left is None or left <= 0 or left > self._retry.max_retry_after:
                 continue
+            left = min(left, budget - spent)
+            if left <= _MIN_SLEEP_SECONDS:
+                break
             await self._sleep(left)
+            spent += left
+        return spent
 
     async def get(self, path: str) -> Any:
         url = self._base_url + path
         attempt = 0
+        budget = self._retry.max_retry_after
         while True:
-            await self._hold()
+            budget -= await self._hold(budget)
             try:
                 response = await self._client.get(
                     path,

@@ -12,6 +12,7 @@ import time
 import httpx
 import pytest
 
+import themeparks._ratelimit as rl
 from themeparks import RateLimitError, RateLimits, RetryConfig, ThemeParks
 from themeparks._ratelimit import Gate, RateLimit, read_rate_limits
 
@@ -290,3 +291,72 @@ class TestTheOptOutsActuallyOptOut:
         with pytest.raises(RateLimitError):
             tp.destinations.list()
         assert slept, "the gate stopped holding for callers who did want it"
+
+
+class TestTheCapBoundsTheWholeCall:
+    """`max_retry_after` promises a ceiling. It has to be a real one.
+
+    Two separate self-initiated holds exist -- the shared gate, and the
+    spent-window wait -- and they stack. A 429 carrying BOTH a `Retry-After`
+    and `RateLimit-Remaining: 0` slept 5s at the gate and then 55s for the
+    window, three times over: 180 seconds inside one call whose cap was 120.
+    Each leg was under the cap, so the per-leg check never fired.
+
+    Nothing caught it because no test sent a 429 carrying rate-limit headers,
+    and because a fake sleep that does not advance the clock cannot show a
+    cumulative total at all. This one advances an injected clock, which is
+    what the real world does.
+    """
+
+    def _run(self, cap, headers):
+        now = [1000.0]
+        original = rl.time.monotonic
+        rl.time.monotonic = lambda: now[0]
+        try:
+            slept: list[float] = []
+
+            def sleep(seconds):
+                slept.append(seconds)
+                now[0] += seconds
+
+            def handler(request):
+                return httpx.Response(429, headers=headers, json={})
+
+            tp = ThemeParks(
+                transport=httpx.MockTransport(handler),
+                cache=False,
+                retry=RetryConfig(max_retry_after=cap),
+            )
+            tp.raw._t._sleep = sleep
+            tp.raw._t._gate._until = 0.0
+            with pytest.raises(RateLimitError):
+                tp.destinations.list()
+            return slept
+        finally:
+            rl.time.monotonic = original
+
+    REAL_429 = {
+        "retry-after": "5",
+        "RateLimit-Limit": "300",
+        "RateLimit-Remaining": "0",
+        "RateLimit-Reset": "60",
+    }
+
+    def test_the_total_never_exceeds_the_cap(self):
+        slept = self._run(120.0, self.REAL_429)
+        assert sum(slept) <= 120.0 + 0.01, f"blocked {sum(slept):.0f}s under a 120s cap"
+
+    def test_a_smaller_cap_binds_harder(self):
+        slept = self._run(30.0, self.REAL_429)
+        assert sum(slept) <= 30.0 + 0.01, f"blocked {sum(slept):.0f}s under a 30s cap"
+
+    def test_it_still_waits_when_there_is_budget(self):
+        # The cap must bound the feature, not disable it.
+        slept = self._run(120.0, self.REAL_429)
+        assert slept, "stopped waiting altogether"
+        assert sum(slept) > 5.0, "only paid the gate, never the window"
+
+    def test_no_meaningless_micro_sleeps(self):
+        # Floating-point residue was producing a trailing sleep of ~1e-14.
+        slept = self._run(120.0, self.REAL_429)
+        assert all(s > 0.001 for s in slept), slept
