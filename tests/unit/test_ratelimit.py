@@ -194,7 +194,9 @@ class TestThroughTheClient:
         tp.destinations.list()  # learns remaining 0
         tp.destinations.list()  # should hold first
         assert slept, "walked straight into a window the server said was spent"
-        assert 0 < slept[0] <= 7.0
+        # Upper bound allows the spread now applied to this path: without it
+        # every waiter woke at the same absolute instant.
+        assert 0 < slept[0] <= 7.0 + 0.25
 
     def test_an_unknown_remaining_never_holds(self):
         slept: list[float] = []
@@ -360,3 +362,58 @@ class TestTheCapBoundsTheWholeCall:
         # Floating-point residue was producing a trailing sleep of ~1e-14.
         slept = self._run(120.0, self.REAL_429)
         assert all(s > 0.001 for s in slept), slept
+
+
+class TestWaitersDoNotWakeAsOne:
+    """The gate exists for concurrency, and nothing measured concurrency.
+
+    Every other test here is sequential, so the one property the gate is for
+    -- N waiters released without re-tripping the limit together -- was never
+    asserted. Both release paths are covered, because the spent-window one had
+    no spread at all: ten waiters derived the same deadline from the same
+    observed_at and left inside the same millisecond, the tightest burst in
+    the client, on the branch that exists to avoid a 429.
+    """
+
+    def test_gate_waiters_are_spread(self):
+        gate = rl.Gate()
+        gate.close_for(5.0)
+        waits = [gate.wait_seconds() for _ in range(20)]
+        assert len(set(waits)) > 1, "every waiter would wake at the same instant"
+        assert all(5.0 <= w < 5.3 for w in waits), waits
+
+    def test_the_spent_window_path_is_spread_too(self):
+        # Against a FROZEN clock. With a live one `left` varies by itself as
+        # time passes between runs, so the set is distinct with or without
+        # spread and the test measures nothing -- the same vacuity that hid
+        # the missing spread here in the first place.
+        original = rl.time.monotonic
+        rl.time.monotonic = lambda: 1000.0
+        try:
+            seen = set()
+            for _ in range(20):
+                slept: list[float] = []
+
+                def handler(request):
+                    return httpx.Response(
+                        200,
+                        headers={**REST, "RateLimit-Remaining": "0", "RateLimit-Reset": "7"},
+                        json={"destinations": []},
+                    )
+
+                tp = ThemeParks(transport=httpx.MockTransport(handler), cache=False)
+                tp.raw._t._sleep = slept.append
+                tp.destinations.list()
+                tp.destinations.list()
+                if slept:
+                    seen.add(round(slept[0], 6))
+            assert len(seen) > 1, f"all waiters left at the same instant: {seen}"
+            assert all(7.0 <= w < 7.3 for w in seen), seen
+        finally:
+            rl.time.monotonic = original
+
+    def test_the_spread_is_bounded(self):
+        # It must not be mistaken for the wait itself.
+        gate = rl.Gate()
+        gate.close_for(1.0)
+        assert max(gate.wait_seconds() for _ in range(50)) < 1.3

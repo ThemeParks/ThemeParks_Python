@@ -159,6 +159,12 @@ class Gate:
         self._jitter = jitter
         self._lock = threading.Lock()
 
+    @property
+    def deadline(self) -> float:
+        """When the gate opens, on the monotonic clock. 0 if it is open."""
+        with self._lock:
+            return self._until
+
     def close_for(self, seconds: float) -> None:
         """Hold every request on this client for at least `seconds`."""
         deadline = time.monotonic() + max(0.0, seconds)

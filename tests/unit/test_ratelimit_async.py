@@ -72,7 +72,9 @@ class TestAsyncHolds:
         await tp.destinations.list()
         await tp.destinations.list()
         assert slept, "walked into a window the server said was spent"
-        assert 0 < slept[0] <= 7.0
+        # Upper bound allows the spread now applied to this path: without it
+        # every waiter woke at the same absolute instant.
+        assert 0 < slept[0] <= 7.0 + 0.25
 
     async def test_an_unknown_remaining_never_holds(self):
         tp, slept = await self._slept({"content-type": "application/json"})
