@@ -1,5 +1,62 @@
 # Changelog
 
+## [3.2.0] - 2026-09-26
+
+### Added
+
+- **The client reads the rate-limit headers, and acts on them.** Both meters,
+  the per-minute REST one and the separate hourly history budget, are exposed
+  on `client.rate_limit`:
+
+  ```python
+  tp.rate_limit.rest.remaining          # 299
+  tp.rate_limit.history.remaining       # on a history call
+  tp.rate_limit.rest.seconds_until_reset()
+  ```
+
+  Every field is optional, and `None` means the server did not say rather than
+  "nothing left". Use `.exhausted`, which is true only when the server said
+  zero. The per-minute figures ride most responses; the hourly history ones are
+  withheld from anything a shared cache may store, because they are per-caller;
+  an unmetered plan advertises nothing. A response served from a cache is
+  ignored entirely, because its figures belong to whoever populated the entry. `reset` is a
+  relative countdown frozen when it was read, so `seconds_until_reset()` ages
+  it rather than returning a stale number.
+
+  When a response says the window is spent, the next request now waits for the
+  advertised reset instead of sending one that is certain to be refused, and to
+  spend a unit of budget being refused. `RetryConfig(respect_remaining=False)`
+  turns it off.
+
+  The hourly history budget is new on the wire; before it there was nothing to
+  read.
+
+### Changed
+
+- **Calls may now block before sending.** When the server has said your window
+  is spent, or has issued a 429 that is still in force, the client waits rather
+  than sending a request that is certain to be refused. A call that used to
+  return in 200ms can now take up to `retry.max_retry_after` (120s) first. That
+  is a TOTAL across the call, not per wait: the shared 429 gate and the
+  spent-window wait stack, and before the budget existed a 429 carrying both a
+  `Retry-After` and a spent window blocked for 180 seconds under a 120 second
+  cap. Turn the two halves off with `RetryConfig(respect_remaining=False)` and
+  `RetryConfig(respect_429=False)`.
+
+### Fixed
+
+- **`respect_429=False` did not opt out.** It raised the error the caller asked
+  for and then held their NEXT call for the full `Retry-After` anyway, because
+  the shared gate was closed regardless of the setting.
+
+- **A 429 was waited out once per in-flight request.** The wait belongs to the
+  caller, not to whichever request met it, so ten concurrent requests each
+  slept their own `Retry-After` and then retried at the same instant,
+  re-tripping the limit together. It is now taken once, on a gate shared by the
+  whole client, with a little jitter so the waiters do not wake in unison. A
+  shorter wait arriving while a longer one is in force no longer brings the
+  gate forward.
+
 ## [3.1.0] - 2026-09-23
 
 ### Added

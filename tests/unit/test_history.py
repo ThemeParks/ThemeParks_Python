@@ -437,4 +437,8 @@ class TestBudgetErrorIsReachableWithDefaults:
         with pytest.raises(RateLimitError) as caught:
             list(tp.entity("park-1").history.days("2026-09-01", "2026-09-02"))
         assert not isinstance(caught.value, BudgetExhaustedError)
-        assert slept == [2.0, 2.0, 2.0]
+        # Jittered: the gate is shared, so without a little spread every
+        # waiter would wake at the same instant and re-trip the limit
+        # together. One wait per retry, taken once, never doubled.
+        assert len(slept) == 3
+        assert all(2.0 <= s < 2.3 for s in slept), slept

@@ -10,6 +10,7 @@ import httpx
 from themeparks._cache import Cache, CacheConfig, InMemoryLRUCache, ttl_for_path
 from themeparks._ergonomic.destinations import AsyncDestinationsApi, DestinationsApi
 from themeparks._ergonomic.entity import AsyncEntityHandle, EntityHandle
+from themeparks._ratelimit import RateLimits
 from themeparks._raw import AsyncRawClient, RawClient
 from themeparks._transport import AsyncTransport, RetryConfig, SyncTransport
 
@@ -52,6 +53,16 @@ class _CachingSyncTransport:
         self._inner = inner
         self._cache = cache
 
+    @property
+    def rate_limit(self) -> RateLimits:
+        """Whatever the inner transport last learned.
+
+        A cache HIT sends no request and so learns nothing, which is correct:
+        the figures then keep saying what the last real response said. They
+        are not invalidated by a hit, because a hit spent no budget either.
+        """
+        return self._inner.rate_limit
+
     def get(self, path: str) -> Any:
         ttl = ttl_for_path(path)
         if ttl > 0:
@@ -68,6 +79,16 @@ class _CachingAsyncTransport:
     def __init__(self, inner: AsyncTransport, cache: Cache) -> None:
         self._inner = inner
         self._cache = cache
+
+    @property
+    def rate_limit(self) -> RateLimits:
+        """Whatever the inner transport last learned.
+
+        A cache HIT sends no request and so learns nothing, which is correct:
+        the figures then keep saying what the last real response said. They
+        are not invalidated by a hit, because a hit spent no budget either.
+        """
+        return self._inner.rate_limit
 
     async def get(self, path: str) -> Any:
         ttl = ttl_for_path(path)
@@ -124,6 +145,24 @@ class ThemeParks:
             raw=self.raw, entity_id=eid
         )
         self.destinations = DestinationsApi(raw=self.raw)
+
+    @property
+    def rate_limit(self) -> RateLimits:
+        """What the server last said about your two budgets.
+
+        `rate_limit.rest` is the per-minute REST meter; `rate_limit.history`
+        is the separate hourly history budget. Every field can be None,
+        because every field can be legitimately absent: an unmetered plan
+        advertises nothing, and neither does a publicly cacheable response,
+        since the figures belong to whoever populated the cache.
+
+        None therefore means "the server did not say", never "nothing left".
+
+            with ThemeParks(api_key=KEY) as tp:
+                tp.entity(park).live()
+                print(tp.rate_limit.rest.remaining)   # e.g. 299
+        """
+        return self.raw._t.rate_limit
 
     def entity(self, entity_id: str) -> EntityHandle:
         return self._entity_ctor(entity_id)
@@ -183,6 +222,24 @@ class AsyncThemeParks:
             raw=self.raw, entity_id=eid
         )
         self.destinations = AsyncDestinationsApi(raw=self.raw)
+
+    @property
+    def rate_limit(self) -> RateLimits:
+        """What the server last said about your two budgets.
+
+        `rate_limit.rest` is the per-minute REST meter; `rate_limit.history`
+        is the separate hourly history budget. Every field can be None,
+        because every field can be legitimately absent: an unmetered plan
+        advertises nothing, and neither does a publicly cacheable response,
+        since the figures belong to whoever populated the cache.
+
+        None therefore means "the server did not say", never "nothing left".
+
+            with ThemeParks(api_key=KEY) as tp:
+                tp.entity(park).live()
+                print(tp.rate_limit.rest.remaining)   # e.g. 299
+        """
+        return self.raw._t.rate_limit
 
     def entity(self, entity_id: str) -> AsyncEntityHandle:
         return self._entity_ctor(entity_id)

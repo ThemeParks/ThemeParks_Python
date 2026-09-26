@@ -1,3 +1,6 @@
+import time
+from email.utils import formatdate
+
 import httpx
 import pytest
 
@@ -153,7 +156,10 @@ def test_retry_after_http_date_header_is_parsed():
     # None
     assert _parse_retry_after(None) is None
     # HTTP-date (in the past -> clamped to 0.0)
-    assert _parse_retry_after("Wed, 21 Oct 2015 07:28:00 GMT") == 0.0
+    # A date in the past is not a wait. It used to come back as 0.0, and only
+    # None reaches the exponential backoff, so 0.0 meant no wait at all:
+    # four requests in 3ms against a server that had just said 429.
+    assert _parse_retry_after("Wed, 21 Oct 2015 07:28:00 GMT") is None
     # Unparseable
     assert _parse_retry_after("not-a-date-ever") is None
 
@@ -213,12 +219,22 @@ class TestRetryAfterCap:
 
     def test_a_short_wait_is_still_honoured(self):
         _, slept, calls = self._run("5")
-        assert slept == [5.0, 5.0, 5.0]
+        # Jittered: the gate is shared, so without a little spread every
+        # waiter would wake at the same instant and re-trip the limit
+        # together. One wait per retry, taken once, never doubled.
+        assert len(slept) == 3
+        assert all(5.0 <= s < 5.3 for s in slept), slept
         assert len(calls) == 4
 
-    def test_the_cap_is_configurable(self):
+    def test_the_cap_is_configurable_and_bounds_the_whole_call(self):
+        # This used to assert three sleeps of 3000s: 9000 seconds of blocking
+        # under a 3600s cap, because the cap was checked per leg and never
+        # against the total. The cap is a per-CALL budget now, so the sum is
+        # what it bounds.
         _, slept, _ = self._run("3000", RetryConfig(max_retry_after=3600.0))
-        assert slept == [3000.0, 3000.0, 3000.0]
+        assert sum(slept) <= 3600.0 + 0.01, slept
+        assert slept, "stopped waiting altogether"
+        assert slept[0] >= 3000.0
 
     def test_no_retry_after_header_still_backs_off(self):
         # The cap is about the server's stated wait. With no header we fall
@@ -226,3 +242,53 @@ class TestRetryAfterCap:
         _, slept, _ = self._run(None)
         assert len(slept) == 3
         assert all(s > 0 for s in slept)
+
+
+class TestRetryAfterNeverMeansNoWait:
+    """`None` and `0` are different answers, and conflating them hammers us.
+
+    Only `None` reaches the exponential backoff. A header that parsed to zero
+    -- `Retry-After: 0`, which RFC 9110 permits, or a negative, or an
+    already-past date -- therefore produced no wait at all. Measured before
+    this: four requests in 3ms against a server actively refusing them, and
+    204 requests a second across ten threads.
+    """
+
+    @pytest.mark.parametrize("raw", ["0", "-5", "0.0", "Wed, 21 Oct 2015 07:28:00 GMT"])
+    def test_a_non_positive_wait_is_no_wait_at_all(self, raw):
+        assert _parse_retry_after(raw) is None
+
+    @pytest.mark.parametrize("raw", ["1", "45", "0.5"])
+    def test_a_real_wait_is_honoured(self, raw):
+        assert _parse_retry_after(raw) == float(raw)
+
+    def test_a_spin_falls_back_to_backoff(self):
+        # The behaviour that matters: a zero must not skip the backoff.
+        slept: list[float] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(429, headers={"retry-after": "0"}, json={})
+
+        client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://x/v1")
+        transport = SyncTransport(
+            client=client,
+            base_url="https://x/v1",
+            user_agent="test/1",
+            retry=RetryConfig(max_retries=3),
+            sleep=slept.append,
+        )
+        with pytest.raises(RateLimitError):
+            transport.get("/anything")
+        assert len(slept) == 3
+        assert all(s > 0 for s in slept), slept
+        # And it grows, rather than retrying at a fixed rate.
+        assert slept[-1] > slept[0]
+
+    def test_a_naive_http_date_is_read_as_utc(self):
+        # parsedate_to_datetime returns a NAIVE datetime for the RFC 5322
+        # `-0000` form, and .timestamp() then read it as local time: wrong by
+        # the host's UTC offset, and negative enough to become the spin above.
+        naive = _parse_retry_after(formatdate(time.time() + 120))
+        gmt = _parse_retry_after(formatdate(time.time() + 120, usegmt=True))
+        assert naive is not None and gmt is not None
+        assert abs(naive - gmt) < 2.0, (naive, gmt)
