@@ -1,6 +1,6 @@
 # Changelog
 
-## [3.2.0] - 2026-09-24
+## [3.2.0] - 2026-09-26
 
 ### Added
 
@@ -15,9 +15,11 @@
   ```
 
   Every field is optional, and `None` means the server did not say rather than
-  "nothing left". An unmetered plan advertises nothing, and neither does a
-  publicly cacheable response, because the figures are per-caller. Use
-  `.exhausted`, which is true only when the server said zero. `reset` is a
+  "nothing left". Use `.exhausted`, which is true only when the server said
+  zero. The per-minute figures ride most responses; the hourly history ones are
+  withheld from anything a shared cache may store, because they are per-caller;
+  an unmetered plan advertises nothing. A response served from a cache is
+  ignored entirely, because its figures belong to whoever populated the entry. `reset` is a
   relative countdown frozen when it was read, so `seconds_until_reset()` ages
   it rather than returning a stale number.
 
@@ -26,10 +28,23 @@
   spend a unit of budget being refused. `RetryConfig(respect_remaining=False)`
   turns it off.
 
-  The server only started publishing the hourly history budget on 2026-09-24;
-  before that there was nothing on the wire to read.
+  The hourly history budget is new on the wire; before it there was nothing to
+  read.
+
+### Changed
+
+- **Calls may now block before sending.** When the server has said your window
+  is spent, or has issued a 429 that is still in force, the client waits rather
+  than sending a request that is certain to be refused. A call that used to
+  return in 200ms can now take up to `retry.max_retry_after` (120s) first. Turn
+  the two halves off with `RetryConfig(respect_remaining=False)` and
+  `RetryConfig(respect_429=False)`.
 
 ### Fixed
+
+- **`respect_429=False` did not opt out.** It raised the error the caller asked
+  for and then held their NEXT call for the full `Retry-After` anyway, because
+  the shared gate was closed regardless of the setting.
 
 - **A 429 was waited out once per in-flight request.** The wait belongs to the
   caller, not to whichever request met it, so ten concurrent requests each

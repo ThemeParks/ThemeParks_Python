@@ -195,11 +195,17 @@ class SyncTransport:
             retry_after = _parse_retry_after(response.headers.get("retry-after"))
             if (
                 status == _STATUS_TOO_MANY_REQUESTS
+                and self._retry.respect_429
                 and retry_after is not None
                 and not _wait_too_long(retry_after, self._retry)
             ):
                 # The wait belongs to the CALLER, not to whichever request met
                 # it, so it goes on the shared gate and _hold() serves it once.
+                #
+                # respect_429=False means "do not wait on a 429", so it must
+                # gate the gate too. Without this the caller got the exception
+                # they asked for and then their NEXT call silently blocked,
+                # which is an opt-out that does not opt out.
                 #
                 # Past the cap the gate is left OPEN on purpose: we raise
                 # instead, and blocking the caller's next call for most of an
@@ -304,11 +310,17 @@ class AsyncTransport:
             retry_after = _parse_retry_after(response.headers.get("retry-after"))
             if (
                 status == _STATUS_TOO_MANY_REQUESTS
+                and self._retry.respect_429
                 and retry_after is not None
                 and not _wait_too_long(retry_after, self._retry)
             ):
                 # The wait belongs to the CALLER, not to whichever request met
                 # it, so it goes on the shared gate and _hold() serves it once.
+                #
+                # respect_429=False means "do not wait on a 429", so it must
+                # gate the gate too. Without this the caller got the exception
+                # they asked for and then their NEXT call silently blocked,
+                # which is an opt-out that does not opt out.
                 #
                 # Past the cap the gate is left OPEN on purpose: we raise
                 # instead, and blocking the caller's next call for most of an

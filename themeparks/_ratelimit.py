@@ -32,12 +32,19 @@ _HISTORY_PREFIX = "ratelimit-history"
 
 
 def _int_or_none(raw: str | None) -> int | None:
+    """These fields are integers per the draft spec; anything else is unknown.
+
+    `int()` alone was too generous and differed from the JavaScript sibling on
+    the same input: PEP 515 means it reads "1_0" as 10. The server only ever
+    sends a non-negative integer, so it does not fire today, but a pair of
+    libraries whose selling point is parity should not disagree on it.
+    """
     if raw is None:
         return None
-    try:
-        return int(raw.strip())
-    except (ValueError, AttributeError):
+    trimmed = raw.strip()
+    if not trimmed.isdigit():
         return None
+    return int(trimmed)
 
 
 @dataclass(frozen=True)
@@ -102,7 +109,8 @@ def _read_one(headers: Mapping[str, str], prefix: str, now: float) -> RateLimit:
 def read_rate_limits(headers: Mapping[str, str], previous: RateLimits) -> RateLimits:
     """Merge whatever this response said into what we already knew.
 
-    A response that mentions neither meter leaves both alone. That matters
+    A response that mentions neither meter leaves both alone, and so does a
+    response served from a cache. That matters
     because most responses mention only one: the history headers appear on
     history routes, and on a cacheable response neither appears. Overwriting
     with blanks would mean the last cacheable response erased everything the
@@ -112,6 +120,12 @@ def read_rate_limits(headers: Mapping[str, str], previous: RateLimits) -> RateLi
     is accepted too, so the keys are compared lowercased.
     """
     lowered = {k.lower(): v for k, v in headers.items()}
+    # A cache HIT carries the figures of whoever populated the entry, frozen
+    # at that moment. They are not ours and the countdown is already wrong, so
+    # the honest reading is that this response said nothing.
+    age = _int_or_none(lowered.get("age"))
+    if age is not None and age > 0:
+        return previous
     # No prefix filtering needed: _read_one looks up EXACT keys, so
     # "ratelimit-limit" and "ratelimit-history-limit" cannot collide. An
     # earlier version filtered the history keys out before reading the REST

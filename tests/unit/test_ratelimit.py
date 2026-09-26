@@ -10,8 +10,9 @@ ONCE for the whole client rather than once per in-flight request.
 import time
 
 import httpx
+import pytest
 
-from themeparks import RateLimits, RetryConfig, ThemeParks
+from themeparks import RateLimitError, RateLimits, RetryConfig, ThemeParks
 from themeparks._ratelimit import Gate, RateLimit, read_rate_limits
 
 REST = {
@@ -73,6 +74,39 @@ class TestReadingHeaders:
         assert out.rest.exhausted is False
 
 
+class TestACachedResponseSaysNothing:
+    """Its figures belong to whoever populated the entry.
+
+    The server withholds the HISTORY figures from anything a shared cache may
+    store, but the per-minute ones ride those responses. Measured against
+    production: three consecutive calls returning `age: 9` and an unmoving
+    `remaining: 285`. A cached `remaining: 0` would make the client sleep out
+    a window belonging to someone else.
+    """
+
+    def test_a_cache_hit_is_ignored(self):
+        known = read_rate_limits(REST, RateLimits())
+        after = read_rate_limits({**REST, "RateLimit-Remaining": "0", "Age": "1713"}, known)
+        assert after.rest.remaining == 299, "took a cached caller's figures"
+
+    def test_a_fresh_response_is_recorded(self):
+        # A cache MISS carries no Age at all, which is the path that matters:
+        # confirmed against production, a MISS returns the figures and a HIT
+        # returns them stale.
+        out = read_rate_limits(REST, RateLimits())
+        assert out.rest.remaining == 299
+
+    def test_age_zero_is_fresh(self):
+        out = read_rate_limits({**REST, "Age": "0"}, RateLimits())
+        assert out.rest.remaining == 299
+
+    def test_a_cache_hit_does_not_erase_what_we_knew(self):
+        known = read_rate_limits({**REST, **HISTORY}, RateLimits())
+        after = read_rate_limits({"Age": "60"}, known)
+        assert after.rest.remaining == 299
+        assert after.history.remaining == 599
+
+
 class TestAbsenceIsNotZero:
     def test_unknown_remaining_is_not_exhausted(self):
         # Anonymous responses carry no figures at all, because they are
@@ -83,17 +117,18 @@ class TestAbsenceIsNotZero:
     def test_zero_remaining_is_exhausted(self):
         assert RateLimit(remaining=0).exhausted is True
 
+    # Both of these pass an explicit `now` rather than reading a clock. The
+    # method takes one precisely so these can be exact; asserting a range
+    # around real wall-clock time makes a gate test flaky under CPU load.
     def test_reset_counts_down_from_when_it_was_read(self):
         # `reset` is relative and frozen at observed_at. Using it later
         # without ageing it is how a client waits far longer than it needs to.
-        meter = RateLimit(reset=60, observed_at=time.monotonic() - 50)
-        left = meter.seconds_until_reset()
-        assert left is not None
-        assert 9.0 <= left <= 11.0
+        meter = RateLimit(reset=60, observed_at=1000.0)
+        assert meter.seconds_until_reset(now=1050.0) == 10.0
 
     def test_an_expired_window_never_reports_negative(self):
-        meter = RateLimit(reset=5, observed_at=time.monotonic() - 100)
-        assert meter.seconds_until_reset() == 0.0
+        meter = RateLimit(reset=5, observed_at=1000.0)
+        assert meter.seconds_until_reset(now=1100.0) == 0.0
 
     def test_unknown_reset_has_no_countdown(self):
         assert RateLimit(remaining=0).seconds_until_reset() is None
@@ -219,3 +254,39 @@ class TestThroughTheCache:
         tp.destinations.list()
         assert len(calls) == 1, "expected the second call to be a cache hit"
         assert tp.rate_limit.rest.remaining == 299
+
+
+class TestTheOptOutsActuallyOptOut:
+    """An advertised switch that does not switch anything is worse than none.
+
+    `respect_429=False` raised the RateLimitError the caller asked for, and
+    then closed the shared gate anyway, so their NEXT call blocked for the
+    full Retry-After with no way to stop it. The setting says "do not wait on
+    a 429"; the gate is a wait on a 429.
+    """
+
+    def _client(self, retry, slept):
+        def handler(request):
+            return httpx.Response(429, headers={"retry-after": "45"}, json={})
+
+        tp = ThemeParks(transport=httpx.MockTransport(handler), cache=False, retry=retry)
+        tp.raw._t._sleep = slept.append
+        return tp
+
+    def test_respect_429_false_never_sleeps_even_on_a_later_call(self):
+        slept: list[float] = []
+        tp = self._client(RetryConfig(respect_429=False), slept)
+        for _ in range(3):
+            with pytest.raises(RateLimitError):
+                tp.destinations.list()
+        assert slept == [], "opted out of 429 waiting and waited anyway"
+
+    def test_respect_429_true_still_holds_the_gate(self):
+        # The opt-out must not have disabled the feature for everyone else.
+        slept: list[float] = []
+        tp = self._client(RetryConfig(max_retries=0), slept)
+        with pytest.raises(RateLimitError):
+            tp.destinations.list()
+        with pytest.raises(RateLimitError):
+            tp.destinations.list()
+        assert slept, "the gate stopped holding for callers who did want it"

@@ -91,10 +91,9 @@ Both `ThemeParks` and `AsyncThemeParks` take the same keyword-only options:
 |--------------|------------------------------------------|--------------------------------------|---------|
 | `base_url`   | `str`                                    | `https://api.themeparks.wiki/v1`     | API base URL (point at a mock / staging if you need to). |
 | `api_key`    | `str \| None`                            | `None`                               | Sent as the `x-api-key` header. Needed for anything beyond the free tier: deeper history, higher rate limits. |
-| `rate_limit` | read-only                                | —                                    | What the server last said about your budgets. See **Rate limits** below. |
 | `user_agent` | `str \| None`                            | `themeparks-sdk-py/<version>`        | Sent as the `User-Agent` header. Set this to identify your app. |
 | `timeout`    | `float` (seconds)                        | `10.0`                               | Per-request timeout. |
-| `retry`      | `RetryConfig \| None`                    | `RetryConfig(max_retries=3, respect_429=True, max_retry_after=120.0)` | Retry/backoff behavior. `max_retries` is N retries beyond the first attempt (so N+1 total calls). `max_retry_after` is the longest `Retry-After` the client will sleep through; past it you get `RateLimitError` instead of a silent wait. |
+| `retry`      | `RetryConfig \| None`                    | `RetryConfig(max_retries=3, respect_429=True, max_retry_after=120.0, respect_remaining=True)` | Retry/backoff behavior. `max_retries` is N retries beyond the first attempt (so N+1 total calls). `max_retry_after` is the longest `Retry-After` the client will sleep through; past it you get `RateLimitError` instead of a silent wait. |
 | `cache`      | `Cache \| CacheConfig \| bool \| None`   | `True` (in-memory LRU)               | See **Caching** below. `False` disables caching entirely. |
 
 Example:
@@ -219,6 +218,8 @@ inputs.
 
 ## Rate limits
 
+`client.rate_limit` is a read-only property, not a constructor option.
+
 The API meters requests per minute, and history requests again per hour. Both
 are advertised on every response that can carry them, and the client reads
 them:
@@ -232,12 +233,21 @@ with ThemeParks(api_key=KEY) as tp:
     print(tp.rate_limit.history.remaining)       # on a history call
 ```
 
-**`None` means the server did not say, never "nothing left".** An unmetered
-plan advertises no figures, and neither does a publicly cacheable response,
-because the numbers are per-caller and a shared cache would hand one caller's
-budget to another. In practice that means anonymous calls carry no figures;
-calls made with a key do. Use `.exhausted`, which is true only when the server
-actually said zero.
+**`None` means the server did not say, never "nothing left".** Use
+`.exhausted`, which is true only when the server actually said zero.
+
+Which figures you get depends on the response:
+
+- The **per-minute** figures ride most responses, anonymous ones included.
+- The **hourly history** figures are withheld from anything a shared cache may
+  store, because they are per-caller and a cache would hand one caller's budget
+  to another. In practice you get them on calls made with a key.
+- An **unmetered plan** advertises nothing at all.
+
+A response served from a cache is ignored entirely. Its figures belong to
+whoever populated the entry and its countdown is already wrong: a cached
+`remaining: 0` would otherwise make the client sleep out someone else's
+window.
 
 The client also acts on what it reads. When a response says the window is
 spent, the next request waits for the advertised reset rather than sending a
