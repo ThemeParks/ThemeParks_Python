@@ -1,5 +1,76 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **`themeparks-backfill --since YYYY-MM-DD` and `--until YYYY-MM-DD`.** A key
+  that reaches the whole archive used to download all of it, every time: a
+  buyer who wanted the last twelve months got five years. Both days are
+  inclusive and must be real calendar days written `YYYY-MM-DD`; `--since`
+  after `--until` is refused before anything is requested. `--since` applies when a file is started. A later run accepts the
+  same `--since` or a later one (a cron line computing "30 days ago" works), and
+  refuses one earlier than the file's first day, or one that would leave a gap,
+  instead of quietly handing back a file that is not what was asked for.
+
+- **`history.changes()` exposes the `opening` state.** The raw history
+  response carries, per entity, the state in force at the start of the range,
+  and `changes()` threw it away. Without it the minutes between midnight and an
+  entity's first change had no known status, so a day rebuilt from raw history
+  disagreed with the daily summary whenever a ride was still running from the
+  night before. The result of `changes()` now has `opening`, a dict of
+  `HistoryOpening` keyed by entity id, covering every entity in the response,
+  including one that did not change all day. Iterating it yields exactly what it
+  always did, and reading `opening` costs no extra request. The async client's
+  result has the same attribute once the response has arrived: iterate first,
+  or `await changes.load()`.
+
+- **`HistorySpan.final_through`**: the newest day whose daily row will not
+  change again, the earlier of `recorded_to` and `retrievable_through`. A
+  property, so `a, b, c = span` still works.
+
+### Fixed
+
+- **A finished park now updates on the next run.** A rerun used to print
+  `already complete` and exit 0 without fetching a single new day, so a nightly
+  cron looked healthy and never updated; the only way to get yesterday was
+  `--overwrite`, which downloaded the whole archive again. A finished file is now
+  carried forward from the day after its last one, appending only the new days.
+  An interrupted run still resumes exactly where it stopped, including a rerun
+  interrupted before its first page, which would otherwise have started again
+  from the top of the archive.
+
+- **The newest rows of a backfill were partial days, and stayed that way.** A run
+  ended on `retrievableThrough`, which is usually today: today's row is the day
+  so far, and the archive records days 2 to 3 behind live data, so the last few
+  days of every file were still changing when they were written. Magic Kingdom's
+  last day summed to about half the operating minutes of a full one. A run now
+  ends at `final_through`, says so when it holds days back, and the next run adds
+  them once they are final. Every row in the file is one that will not change.
+
+  **Files written by 4.0.x are corrected once.** Their state file does not say
+  which of their newest days were final, so the first run of this version
+  removes the rows from the last seven days before that run's end and fetches
+  those days again. Every other row is left byte for byte as it was. A 4.0 file
+  whose newest row is older than that is not rewritten at all. The state file
+  format moves to version 2 for this; version 1 files from this SDK are upgraded,
+  not refused.
+
+- **A finished file written to a different column layout was appended to.** Only
+  an unfinished one was refused. A finished one fell through to a fresh start,
+  which opened the existing file in append mode and wrote the whole archive into
+  it a second time under a second header, exit 0. It is refused now, the same
+  way.
+
+- **A state file whose data file had been deleted was continued**, producing a
+  file that started part-way through its range and was then recorded as
+  complete. The park is downloaded again from the start instead.
+
+- **The README said `waitTime` is an `int`.** The API's schema declares it a
+  JSON `number`, the models type it `float`, and a raw row dumped to JSON says
+  `45.0`. The README now says `float | None`, explains the `45.0`, and a test
+  holds its table to the models' types.
+
 ## [4.0.1] - 2026-09-28
 
 ### Fixed

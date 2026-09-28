@@ -147,12 +147,18 @@ Each variant is exposed as an attribute on `entry.queue`. All are
 
 | Attribute              | Type                  | Fields                                                                                              |
 |------------------------|-----------------------|------------------------------------------------------------------------------------------------------|
-| `queue.STANDBY`        | `StandbyQueue`        | `waitTime: int \| None`                                                                              |
-| `queue.SINGLE_RIDER`   | `SingleRiderQueue`    | `waitTime: int \| None`                                                                              |
-| `queue.PAID_STANDBY`   | `PaidStandbyQueue`    | `waitTime: int \| None`                                                                              |
+| `queue.STANDBY`        | `StandbyQueue`        | `waitTime: float \| None`                                                                            |
+| `queue.SINGLE_RIDER`   | `SingleRiderQueue`    | `waitTime: float \| None`                                                                            |
+| `queue.PAID_STANDBY`   | `PaidStandbyQueue`    | `waitTime: float \| None`                                                                            |
 | `queue.RETURN_TIME`    | `ReturnTimeQueue`     | `state`, `returnStart`, `returnEnd`                                                                  |
 | `queue.PAID_RETURN_TIME` | `PaidReturnTimeQueue` | `state`, `returnStart`, `returnEnd`, `price`                                                       |
 | `queue.BOARDING_GROUP` | `BoardingGroupQueue`  | `allocationStatus`, `currentGroupStart`, `currentGroupEnd`, `nextAllocationTime`, `estimatedWait` |
+
+`waitTime` is a `float` because the API's schema declares it a JSON `number`,
+not an integer, so a 45-minute wait arrives as `45.0` and a raw row dumped to
+JSON says `45.0`. Use `current_wait_time(entry)` or `int(...)` when you want an
+`int`, and format with `{wait:.0f}`, not `{wait:d}`, if you print the field
+directly.
 
 #### Direct access
 
@@ -201,7 +207,7 @@ with ThemeParks() as tp:
     live = tp.entity("75ea578a-adc8-4116-a54d-dccb60765ef9").live()
     for entry in live.liveData or []:
         for q in iter_queues(entry):
-            # q is a dict, e.g. {"type": "STANDBY", "waitTime": 35}
+            # q is a dict, e.g. {"type": "STANDBY", "waitTime": 35.0}
             #                or {"type": "PAID_RETURN_TIME", "state": "AVAILABLE", ...}
             print(entry.name, q)
 ```
@@ -274,18 +280,31 @@ with ThemeParks(api_key=KEY) as tp:
     history = tp.entity(DISNEYLAND).history
 
     # What exists, and what your key may read. Same three fields whether the
-    # id is a park or a single ride.
+    # id is a park or a single ride. `final_through` is the newest day whose
+    # row will not change again: store through that, ask for the rest later.
     span = history.span()
     print(span.archive_from, span.recorded_to, span.retrievable_through)
+    print(span.final_through)
 
     # One summary row per park-local day, as (entity id, row).
     for entity_id, row in history.days(span.archive_from, span.retrievable_through):
         print(row.date, entity_id, row.operatingMinutes, row.standby.p50 if row.standby else None)
 
-    # Every recorded change on one day.
-    for entity_id, row in history.changes("2026-09-20"):
+    # Every recorded change on one day, and the state before the first of them.
+    changes = history.changes("2026-09-20")
+    for entity_id, row in changes:
         print(row.time, entity_id, row.status)
+    for entity_id, opening in changes.opening.items():
+        print(entity_id, "at the start of the day:", opening.status)
 ```
+
+**A day rebuilds from `opening` plus the rows.** Each row is the entity's
+complete state from its `time` until the next row. `changes.opening` is the
+state in force before the first row, keyed by entity id, so the minutes between
+midnight and a ride's first change have a status too: a ride still running from
+the night before, say. It covers every entity in the response, including one
+that did not change all day. Iterating `changes()` yields exactly what it
+always did, and reading `opening` costs no extra request.
 
 **Ask the park, not the rides.** Both history endpoints answer every entity in
 a park in one request. Pulling the same data ride by ride is around a hundred
@@ -330,6 +349,29 @@ It reads how far back your own key may ask and starts there, writes NDJSON or
 `--format csv`, names every row with the park and the entity, records what it
 has done so re-running never duplicates a file, and exits 75 when the hourly
 history budget runs out so a scheduler retries rather than alerts.
+
+```bash
+themeparks-backfill "Epcot" --since 2025-01-01                     # not the whole archive
+themeparks-backfill "Epcot" --since 2025-01-01 --until 2025-12-31  # one year, both days inclusive
+```
+
+**Run it again to bring a file up to date.** A finished park is carried
+forward from the day after its last one, so the same command in a nightly cron
+appends the new days and nothing else. Only **final** days are written: today's
+row is the day so far, and the archive records days 2 to 3 behind live data, so
+the newest days can still change. A run stops at the newest final day
+(`span().final_through`) and says so, and the next run adds the rest. Every row
+in the file is one that will not change later.
+
+`--since` applies when a file is started. Later runs continue that file and
+accept the same `--since`, or a later one, such as a cron line computing "30
+days ago". One earlier than the file's first day, or one that would leave a gap,
+is refused rather than ignored: pass `--overwrite`, or a different `--out`.
+
+Files written by 4.0.x ended on today, so their newest rows can be partial. The
+first run of this version removes the rows from the last week of such a file and
+fetches those days again, final this time. Everything else in the file is left
+exactly as it was.
 
 `python -m themeparks.backfill` is the same thing, which is the one to use if
 `pip install --user` put the script somewhere off your PATH. `themeparks-backfill
