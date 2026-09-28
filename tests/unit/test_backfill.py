@@ -23,6 +23,7 @@ import csv
 import inspect
 import json
 from datetime import date
+from enum import Enum
 from pathlib import Path
 from typing import Union
 
@@ -31,7 +32,13 @@ from pydantic import BaseModel, ValidationError
 
 from themeparks import APIError, BudgetExhaustedError, NetworkError, RateLimitError, backfill
 from themeparks._client import PACKAGE_VERSION
-from themeparks._ergonomic.history import EntityRef, HistoryApi, HistoryPage, HistorySpan
+from themeparks._ergonomic.history import (
+    EntityRef,
+    HistoryApi,
+    HistoryPage,
+    HistorySpan,
+    _ref,
+)
 from themeparks._generated.models import (
     HistoryDailyRow,
     HistoryDailyStats,
@@ -1262,3 +1269,79 @@ class TestTheCsvContractSharedWithTheJavaScriptSdk:
         assert len(contract["columns"]) == 41
         assert len(contract["fingerprint"]) == 16
         assert contract["columns"][:5] == backfill.IDENTITY_COLUMNS
+
+
+class TestTheBudgetPathAlsoKeepsAnEarlierRunsRows:
+    """Exit 75 on a RESUMED run must not delete what earlier runs downloaded.
+
+    Found by the committed mutant list, not by review: the guard existed on the
+    generic failure path and the budget path had the same `written == 0` test
+    with no test behind it. It is the more dangerous of the two, because exit 75
+    is the ORDINARY outcome of a long back fill -- a scheduler hits it, the file
+    vanishes, the next run appends only the tail and records `complete: true`.
+    """
+
+    def _resumed(self, tmp_path: Path) -> None:
+        (tmp_path / "p.ndjson").write_text('{"row": 1}\n{"row": 2}\n', encoding="utf-8")
+        _state_file(tmp_path, lastDay="2025-06-30", resumeFrom="2025-07-01")
+
+    def test_a_spent_budget_on_a_resumed_run_keeps_the_file(self, tmp_path: Path) -> None:
+        self._resumed(tmp_path)
+        hist = _History(archive_from="2025-01-01", through="2026-09-28", floor=None)
+
+        def days_with_entities(start=None, end=None, *, max_wait=120.0, on_page=None):
+            raise BudgetExhaustedError("429", status=429, body={}, url="u", retry_after=2700.0)
+            yield  # pragma: no cover - keeps this a generator
+
+        hist.days_with_entities = days_with_entities  # type: ignore[assignment]
+        code = backfill.backfill_park(_Client(hist), _Park("p", "P"), tmp_path, "ndjson")
+
+        assert code == backfill.EX_TEMPFAIL
+        assert (tmp_path / "p.ndjson").exists(), "a retryable failure destroyed the archive"
+        assert (tmp_path / "p.ndjson").read_text(encoding="utf-8").count("\n") == 2
+
+    def test_a_spent_budget_on_a_first_run_leaves_no_empty_file(self, tmp_path: Path) -> None:
+        # The other half, so the guard cannot become "never delete": a 0-byte file
+        # reads as "this park has no history".
+        hist = _History(archive_from="2025-01-01", through="2026-09-28", floor=None)
+
+        def days_with_entities(start=None, end=None, *, max_wait=120.0, on_page=None):
+            raise BudgetExhaustedError("429", status=429, body={}, url="u", retry_after=2700.0)
+            yield  # pragma: no cover
+
+        hist.days_with_entities = days_with_entities  # type: ignore[assignment]
+        assert backfill.backfill_park(_Client(hist), _Park("p", "P"), tmp_path, "ndjson") == (
+            backfill.EX_TEMPFAIL
+        )
+        assert not (tmp_path / "p.ndjson").exists()
+
+
+class TestTheEntityTypeIsTheApisString:
+    def test_an_enum_entity_type_is_unwrapped_to_its_value(self) -> None:
+        """`str(EntityType.SHOW)` is 'EntityType.SHOW', not 'SHOW'.
+
+        A customer filtering a CSV on 'SHOW' matches nothing and is told nothing.
+        The JavaScript SDK pins this; Python had no equivalent, because every
+        stub in this file hands the writer a plain string and so never exercises
+        the unwrap. Found by the committed mutant list.
+        """
+
+        class FakeEntityType(str, Enum):
+            SHOW = "SHOW"
+
+        class FakeEntity:
+            id = "ent-1"
+            name = "Fantasmic!"
+            entityType = FakeEntityType.SHOW  # noqa: N815 - the API's own spelling
+
+        ref = _ref(FakeEntity())
+        assert ref.entity_type == "SHOW"
+        assert "EntityType" not in ref.entity_type
+
+    def test_a_plain_string_entity_type_is_unchanged(self) -> None:
+        class FakeEntity:
+            id = "ent-1"
+            name = "Space Mountain"
+            entityType = "ATTRACTION"  # noqa: N815 - the API's own spelling
+
+        assert _ref(FakeEntity()).entity_type == "ATTRACTION"
