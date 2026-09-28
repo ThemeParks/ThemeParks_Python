@@ -47,7 +47,6 @@ from __future__ import annotations
 
 import argparse
 import contextlib
-import csv
 import hashlib
 import json
 import os
@@ -232,6 +231,38 @@ def _scalar(value: Any) -> Any:
     return _defuse(unwrapped) if isinstance(unwrapped, str) else unwrapped
 
 
+def _csv_cell(value: Any) -> str:
+    """One cell, quoted exactly as the JavaScript SDK quotes it.
+
+    NOT `csv.DictWriter`, and the reason is a real defect. With
+    `lineterminator="\n"`, the csv module's QUOTE_MINIMAL does not quote a bare
+    carriage return on Python 3.9 or 3.10 -- it only quotes characters that appear
+    in the line terminator -- so an entity name containing one produced a row that
+    parsed as two, with every later column shifted. 3.11 changed the module to
+    always quote CR and LF, so the bug was invisible on a modern interpreter and
+    live on two supported ones.
+
+    Relying on stdlib behaviour that moved between 3.10 and 3.11 cannot give a file
+    that is byte-identical across Python versions, let alone identical to the
+    JavaScript SDK's. Ten lines of explicit quoting can.
+    """
+    text = "" if value is None else str(value)
+    if any(ch in text for ch in ('"', ",", "\r", "\n")):
+        escaped = text.replace('"', '""')
+        return f'"{escaped}"'
+    return text
+
+
+def _csv_line(cells: dict[str, Any]) -> str:
+    """A row, in column order, LF-terminated.
+
+    LF, not RFC 4180's CRLF: every reader accepts either, and this command also
+    writes NDJSON with LF and has a JavaScript twin that writes LF, so one park
+    should not come back as three different byte streams.
+    """
+    return ",".join(_csv_cell(cells.get(column)) for column in CSV_COLUMNS) + "\n"
+
+
 def _csv_row(ref: EntityRef, row: Any, ident: _RowIdentity) -> dict[str, Any]:
     """One CSV row: the run's identity, then every field of the day's row."""
     return {
@@ -278,25 +309,16 @@ class Writer:
         self._handle = handle
         self._fmt = fmt
         self._ident = ident
-        self._csv = None
-        if fmt == "csv":
-            # LF, not the csv module's default CRLF. RFC 4180 says CRLF and
-            # every reader accepts either, but this command also writes NDJSON
-            # with LF, and the JavaScript SDK's identical command writes LF -- so
-            # the same park in two formats and two languages should not come back
-            # as three different byte streams.
-            self._csv = csv.DictWriter(handle, fieldnames=CSV_COLUMNS, lineterminator="\n")
-            if write_header:
-                # A UTF-8 BOM, so Excel on Windows does not read the file in the
-                # local code page and render `Walt Disney World® Resort` as
-                # mojibake. The primary reader of this file is a spreadsheet.
-                # Written with the header, so a resumed file never gains a second.
-                handle.write("\ufeff")
-                self._csv.writeheader()
+        if fmt == "csv" and write_header:
+            # A UTF-8 BOM, so Excel on Windows does not read the file in the local
+            # code page and render `Walt Disney World® Resort` as mojibake. The
+            # primary reader of this file is a spreadsheet. Written with the header,
+            # so a resumed file never gains a second.
+            handle.write("\ufeff" + _csv_line(dict(zip(CSV_COLUMNS, CSV_COLUMNS))))
 
     def write(self, ref: EntityRef, row: Any) -> None:
-        if self._csv is not None:
-            self._csv.writerow(_csv_row(ref, row, self._ident))
+        if self._fmt == "csv":
+            self._handle.write(_csv_line(_csv_row(ref, row, self._ident)))
             return
         # Identity keys come FIRST in the object, so a human reading one line of
         # NDJSON sees what it is before the numbers.

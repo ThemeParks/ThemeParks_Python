@@ -1050,9 +1050,18 @@ class TestTheSpreadsheetIsTheReader:
         # A bare CR unquoted makes one row parse as two, with every later column
         # shifted. The JS regex omitted \r; Python's csv module quotes it.
         path = self._write(tmp_path, entity="Space Mountain\rFastPass")
-        rows = list(csv.reader(path.read_text(encoding="utf-8-sig").splitlines()))
+        # READ WITH A REAL CSV READER over the file. `splitlines()` splits on a bare
+        # CR whether or not it is inside quotes, so reading that way tests Python's
+        # string method rather than the file.
+        with path.open(encoding="utf-8-sig", newline="") as handle:
+            rows = list(csv.reader(handle))
         assert len(rows) == 2, "the row split"
         assert len(rows[1]) == len(backfill.CSV_COLUMNS)
+        assert rows[1][3] == "Space Mountain\rFastPass", "the name was altered"
+        # And the BYTES: the field is quoted, so no reader can split it. Read as
+        # bytes, because text mode translates the CR to a newline before any
+        # assertion can see it.
+        assert b'"Space Mountain\rFastPass"' in path.read_bytes()
 
 
 class TestTheRowDoesNotRenameTheRun:

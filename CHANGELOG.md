@@ -68,6 +68,14 @@ differences being today's row, which grows as the day elapses.
   rather than alerting; anything the API actively rejected still exits 1. The
   JavaScript SDK had these the other way round.
 
+- **A carriage return in an entity name was written unquoted on Python 3.9 and
+  3.10**, so one row parsed as two with every later column shifted. The `csv`
+  module's QUOTE_MINIMAL only quotes characters that appear in the line terminator,
+  and this command sets LF; 3.11 changed the module to always quote CR and LF, so
+  the defect was invisible on a modern interpreter and live on two supported ones.
+  The CSV writer now does its own minimal quoting, which also makes the output
+  byte-identical across Python versions rather than only within one.
+
 - **UTC timestamps are written `Z`, not `+00:00`**, and CSV line endings are LF.
   Between them these accounted for 39,201 differing lines against the JavaScript
   SDK's output for no difference in meaning.
