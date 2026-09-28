@@ -34,10 +34,11 @@ import csv
 import json
 import os
 import sys
+from datetime import date
 from pathlib import Path
 from typing import Any, TextIO
 
-from themeparks import BudgetExhaustedError, ThemeParks
+from themeparks import APIError, BudgetExhaustedError, ThemeParks
 
 EX_TEMPFAIL = 75
 
@@ -103,6 +104,26 @@ class Writer:
         self._handle.write(json.dumps(payload) + "\n")
 
 
+def _window_floor(exc: APIError) -> str | None:
+    """The earliest day this key may ask for, read out of a 403 body.
+
+    The API knows the date exactly and says so:
+
+        403 {"type": "HISTORY_WINDOW_EXCEEDED",
+             "message": "This key can see history back to 2025-08-25 (400 days).",
+             "earliestAllowedDate": "2025-08-25"}
+
+    `/history/coverage` does not carry it. It reports `archiveFrom` (what we
+    hold) and `retrievableThrough` (your ceiling) and no floor, so until it
+    grows one, the 403 is the only place this number exists.
+    """
+    body = exc.body
+    if not isinstance(body, dict) or body.get("type") != "HISTORY_WINDOW_EXCEEDED":
+        return None
+    floor = body.get("earliestAllowedDate")
+    return floor if isinstance(floor, str) and floor else None
+
+
 def backfill_park(tp: ThemeParks, park_id: str, out_dir: Path, fmt: str) -> int:
     """Write one park's daily history. Returns 0, or EX_TEMPFAIL if the budget ran out."""
     history = tp.entity(park_id).history
@@ -121,17 +142,47 @@ def backfill_park(tp: ThemeParks, park_id: str, out_dir: Path, fmt: str) -> int:
         file=sys.stderr,
     )
 
+    # THE START IS THE ARCHIVE'S, AND THE ARCHIVE IS DEEPER THAN MOST PLANS.
+    # `span.retrievable_through` bounds the END at what this key may reach, and
+    # there is no matching field for the beginning: coverage reports
+    # `archiveFrom` (what we hold) and `retrievableThrough` (your ceiling), with
+    # no floor. So on any plan short of the full archive, `archive_from` is
+    # usually before the first day this key may ask for, and the FIRST request
+    # 403s. That is what happened to the first customer to run this, on Pro,
+    # against a park holding five years.
+    #
+    # The 403 carries the floor, so this asks, is told, and starts again there.
+    # One wasted request and a line of explanation, instead of a traceback.
     written = 0
     last_day = None
+
+    def write_rows(handle: TextIO, first_day: str | date | None) -> None:
+        """Stream one range into the file. Raises whatever the SDK raises."""
+        nonlocal written, last_day
+        writer = Writer(handle, fmt, write_header=not has_rows and written == 0)
+        for entity_id, row in history.days(first_day, end):
+            writer.write(entity_id, row)
+            written += 1
+            last_day = row.date
+            if written % 5000 == 0:
+                print(f"  {written} rows, at {last_day}", file=sys.stderr)
+
     try:
         with out_path.open("a", newline="") as handle:
-            writer = Writer(handle, fmt, write_header=not has_rows)
-            for entity_id, row in history.days(start, end):
-                writer.write(entity_id, row)
-                written += 1
-                last_day = row.date
-                if written % 5000 == 0:
-                    print(f"  {written} rows, at {last_day}", file=sys.stderr)
+            try:
+                write_rows(handle, start)
+            except APIError as exc:
+                floor = _window_floor(exc)
+                # Only retry when nothing was written: a 403 mid-stream is not a
+                # plan boundary, and silently restarting would duplicate rows.
+                if floor is None or written:
+                    raise
+                print(
+                    f"  this key reaches back to {floor}, not {start} — starting there",
+                    file=sys.stderr,
+                )
+                start = floor
+                write_rows(handle, start)
     except BudgetExhaustedError as exc:
         if last_day is not None:
             checkpoint.write_text(last_day.isoformat())
