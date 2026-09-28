@@ -1,5 +1,34 @@
 # Changelog
 
+## [4.0.1] - 2026-09-28
+
+### Fixed
+
+- **A run with no API key now says so when it finishes**, not only when it
+  starts. Without a key the command SUCCEEDS: it reads the 7 days anonymous
+  access allows, writes 433 rows of Magic Kingdom instead of about 94,000, and
+  exits 0. The notice was printed before a run that takes minutes, so it scrolled
+  away, and the last thing on screen was `done: 433 rows` -- which for someone
+  who has just paid for 400 days is indistinguishable from success. There is a
+  file, there is no error, and the number means nothing unless you already know
+  what it should have been.
+
+  The README and the command's own `--help` now `export THEMEPARKS_API_KEY`
+  before the example that needs it, and still say `--list` does not: finding a
+  park before you have paid is the point of that flag.
+
+### Added
+
+- **A committed mutant list** (`tests/mutation/mutants.json`) and a nightly,
+  non-gating job that runs it. An author-written mutant list contains the
+  mutations that author's tests already catch -- one scored 14/14 on this package
+  while an independent sweep found 27 survivors, including the defect 4.0.0
+  exists to fix. The list is committed so a reviewer can see what is checked and,
+  more usefully, what is not. Its first run found two gaps, both closed here: a
+  spent hourly budget on a resumed run deleted the accumulated archive, and
+  `str(EntityType.SHOW)` reached a CSV cell as `EntityType.SHOW` rather than
+  `SHOW`.
+
 ## [4.0.0] - 2026-09-28
 
 **3.3.0 was yanked: incomplete CSV export and a resume defect.**
