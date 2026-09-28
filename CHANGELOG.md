@@ -1,5 +1,98 @@
 # Changelog
 
+## [3.4.0] - 2026-09-28
+
+Everything here came out of porting `themeparks-backfill` to the JavaScript SDK
+and then diffing the two outputs over the same park. Two independent
+implementations reading the same API disagree in exactly the places one of them
+is wrong. EPCOT's full archive now comes back **byte for byte identical** from
+both: 73,522 rows, 41 columns, the only differences being today's row, which
+grows as the day elapses.
+
+### Fixed
+
+- **A resumed download no longer duplicates a day.** The checkpoint was the
+  newest row written. The page it came from covered further -- an entity that
+  stopped reporting has no rows for the tail days -- so a rerun re-fetched a day
+  already in the file and appended every row of it again, breaking the
+  `(entityId, date)` key the file is documented to have. On the exit-75 path,
+  which is the ordinary path for a long back fill, not an edge case. The
+  checkpoint is now the day the server's own `next` URL starts on. Verified
+  against two real consecutive pages where the newest row, the page's last day
+  and the resume point are three different dates.
+
+- **The CSV was missing ten of the thirty-six fields the API sends, on every
+  row.** `unknownMinutes`, the whole `inParkHours` block (the day's numbers
+  limited to the park's published hours -- usually the ones you want, since a
+  ride "down" at 2am is not down) and `extremeWaits` (how many readings of 480+
+  minutes are folded into the statistics, which is how you spot a feed error)
+  were in no column. `singleRider` carried two of its five percentiles while
+  `standby` carried all five. On a five-year EPCOT export, 37,352 of 73,522 rows
+  were missing their in-park statistics.
+
+  **The column list is now generated from the model**, so it cannot drift again:
+  regenerate the models and the columns follow. **The header has changed** --
+  fifteen columns added and the order is the schema's, so read by name rather
+  than by position.
+
+- **Vendored models were stale, and pydantic drops what it does not declare.** So
+  `unknownMinutes`, `inParkHours` and `extremeWaits` were being deleted at parse
+  time -- not just from the CSV, from every Python caller of `days()`. Models
+  regenerated from the live spec.
+
+- **UTC timestamps are written `Z`, not `+00:00`.** Same instant, different
+  string; `Z` is what the API sends. This alone made 39,201 lines of an EPCOT
+  export differ from the JavaScript SDK's.
+
+- **CSV line endings are LF**, matching this command's own NDJSON and the
+  JavaScript SDK, rather than the `csv` module's default CRLF.
+
+- **One park's failure no longer abandons the rest.** A 500 on the third park of
+  a six-park destination used to abort the run: parks four, five and six were
+  never attempted, and the traceback did not say which were missing. Every park
+  is tried, what failed is named at the end, and the exit code still says
+  something went wrong. A spent budget still stops everything, deliberately.
+
+- **A failed park no longer leaves a 0-byte file.** Opening the output created it
+  before the first request, so a park that failed with nothing written left a
+  file that reads as "this park has no history".
+
+- **A network failure, a full disk or Ctrl-C is a sentence, not a traceback.** A
+  traceback is a bug report about this command; none of those are bugs in it, and
+  a customer who has just paid reads one as the tool being broken. Ctrl-C says
+  how to continue.
+
+- **The user agent named neither version.** It was the literal
+  `themeparks-backfill/1` -- a hardcoded 1 that could never match a release --
+  and it replaced the SDK's own user agent, so a support question about a bad
+  download had no version to work from at either end. Now
+  `themeparks-backfill/<version> themeparks-sdk-py/<version>`.
+
+- **`--list <text>` reported the wrong total.** It printed "all 1 parks" for a
+  destination with six, on the one line whose whole job is that number -- and
+  that line tells you to pass the destination id.
+
+- **An ambiguous exact name listed the wrong candidates.** "Disneyland Park" is
+  two live parks; the list widened to substrings and offered Hong Kong Disneyland
+  Park as a third.
+
+### Added
+
+- **`on_page` on `days()` and `days_with_entities()`**, called once every row of a
+  page has been yielded, with a `HistoryPage` (`start`, `end`, `next_url`). This
+  is the only safe checkpoint for a resumable download: a page boundary is the
+  server's own answer to "where do I carry on", and the rows cannot tell you.
+- **`--version`.**
+- `EntityRef` and `HistoryPage` are exported from the package. `EntityRef` is
+  part of `days_with_entities()`'s public return type and could not be imported
+  to annotate it.
+
+### Changed
+
+- The `themeparks-backfill` entry point is `themeparks.backfill:cli`, which adds
+  the top-level error handling. `main()` is unchanged for anyone calling it
+  directly.
+
 ## [3.3.0] - 2026-09-28
 
 ### Added

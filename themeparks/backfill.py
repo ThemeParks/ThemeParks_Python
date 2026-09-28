@@ -52,18 +52,34 @@ import json
 import os
 import sys
 import unicodedata
-from datetime import date
+from datetime import date, datetime
+from datetime import date as _date
 from pathlib import Path
-from typing import Any, NamedTuple, TextIO, Union
+from typing import Any, NamedTuple, TextIO, Union, get_args
+from urllib.parse import parse_qs, urlparse
 
-from themeparks import APIError, BudgetExhaustedError, RateLimitError, ThemeParks
-from themeparks._ergonomic.history import EntityRef
+from pydantic import BaseModel
 
-USER_AGENT = "themeparks-backfill/1"
+from themeparks import (
+    APIError,
+    BudgetExhaustedError,
+    RateLimitError,
+    ThemeParks,
+    ThemeParksError,
+)
+from themeparks._client import PACKAGE_VERSION, _default_user_agent
+from themeparks._ergonomic.history import EntityRef, HistoryPage
+from themeparks._generated.models import HistoryDailyRow
+
+# The command's identity IN FRONT OF the SDK's, not instead of it. It used to be
+# the literal "themeparks-backfill/1": a hardcoded 1 that could never match a
+# release, and it replaced the SDK's user agent entirely, so a support question
+# about a bad download had no version to work from at either end.
+USER_AGENT = f"themeparks-backfill/{PACKAGE_VERSION} {_default_user_agent()}"
 
 EX_TEMPFAIL = 75
 
-CSV_COLUMNS = [
+IDENTITY_COLUMNS = [
     # Identity first. A reader opening this in a spreadsheet should know what a
     # row is before they reach the numbers, and a table loaded from several files
     # needs parkId to tell them apart.
@@ -72,47 +88,104 @@ CSV_COLUMNS = [
     "entityId",
     "entityName",
     "entityType",
-    "date",
-    "firstOperatingAt",
-    "lastClosedAt",
-    "operatingMinutes",
-    "downMinutes",
-    "showCount",
-    "changes",
-    "standbyMin",
-    "standbyP50",
-    "standbyMean",
-    "standbyP90",
-    "standbyMax",
-    "singleRiderP50",
-    "singleRiderMax",
 ]
 
 
+def _flatten_columns(model: type[BaseModel], prefix: str = "") -> list[str]:
+    """Every scalar in a daily row, as one flat column name each.
+
+    DERIVED FROM THE MODEL, not typed out. The hand-written list had drifted three
+    ways at once: `unknownMinutes` and the whole `inParkHours` block were on every
+    row the API returns and in no column, `extremeWaits` likewise, and
+    `singleRider` carried two of its five percentiles while `standby` carried all
+    five. Ten of thirty-six fields were missing, silently, from a file people pay
+    for. Generated from the schema it cannot drift again: regenerate the models
+    and the columns follow.
+    """
+    columns: list[str] = []
+    for name, field in model.model_fields.items():
+        inner = _stats_model(field.annotation)
+        if inner is None:
+            columns.append(
+                f"{prefix}{name}" if prefix == "" else f"{prefix}{name[0].upper()}{name[1:]}"
+            )
+            continue
+        head = name if prefix == "" else f"{prefix}{name[0].upper()}{name[1:]}"
+        columns.extend(_flatten_columns(inner, head))
+    return columns
+
+
+def _stats_model(annotation: Any) -> type[BaseModel] | None:
+    """The nested model an annotation wraps, or None for a scalar.
+
+    Every nested block on a daily row is optional, so the annotation is a union
+    with None and the model has to be dug out of it.
+    """
+    candidates = [annotation, *get_args(annotation)]
+    for candidate in candidates:
+        for unwrapped in (candidate, *get_args(candidate)):
+            if isinstance(unwrapped, type) and issubclass(unwrapped, BaseModel):
+                return unwrapped
+    return None
+
+
+DATA_COLUMNS = _flatten_columns(HistoryDailyRow)
+CSV_COLUMNS = [*IDENTITY_COLUMNS, *DATA_COLUMNS]
+
+
+def _cells(value: Any, prefix: str = "") -> dict[str, Any]:
+    """One model flattened to `{column: value}`, mirroring `_flatten_columns`."""
+    out: dict[str, Any] = {}
+    for name, field in type(value).model_fields.items():
+        column = f"{prefix}{name}" if prefix == "" else f"{prefix}{name[0].upper()}{name[1:]}"
+        item = getattr(value, name, None)
+        if _stats_model(field.annotation) is not None:
+            if item is None:
+                # An absent block is absent for a reason: no wait was in force, or
+                # the park published no hours. Empty cells, never zeroes -- a zero
+                # would read as "measured, and it was nothing".
+                nested = _require(_stats_model(field.annotation))
+                for column_name in _flatten_columns(nested, column):
+                    out[column_name] = ""
+            else:
+                out.update(_cells(item, column))
+            continue
+        out[column] = _scalar(item)
+    return out
+
+
+def _require(model: type[BaseModel] | None) -> type[BaseModel]:
+    if model is None:  # pragma: no cover - _cells only calls this when it is not
+        raise AssertionError("expected a nested model")
+    return model
+
+
+def _scalar(value: Any) -> Any:
+    """A cell a spreadsheet can read: dates and times as ISO, None as empty.
+
+    UTC is written `Z`, not `+00:00`. Both are valid ISO 8601 and mean the same
+    instant, but `Z` is what the API sends and what the JavaScript SDK's identical
+    command writes, and a paid export of the same park should not differ by
+    language. Python's `isoformat()` is the only reason it did.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, datetime):
+        return value.isoformat().replace("+00:00", "Z")
+    if isinstance(value, _date):
+        return value.isoformat()
+    return getattr(value, "value", value)
+
+
 def _csv_row(ref: EntityRef, row: Any, ident: _RowIdentity) -> dict[str, Any]:
-    """Flatten the nested standby/singleRider stats into one wide row."""
-    standby = row.standby
-    single = row.singleRider
+    """One CSV row: the run's identity, then every field of the day's row."""
     return {
         "parkId": ident.park.id,
         "parkName": ident.park.name,
         "entityId": ref.id,
         "entityName": ref.name,
         "entityType": ref.entity_type,
-        "date": row.date.isoformat(),
-        "firstOperatingAt": row.firstOperatingAt.isoformat() if row.firstOperatingAt else "",
-        "lastClosedAt": row.lastClosedAt.isoformat() if row.lastClosedAt else "",
-        "operatingMinutes": row.operatingMinutes,
-        "downMinutes": row.downMinutes,
-        "showCount": row.showCount if row.showCount is not None else "",
-        "changes": row.changes,
-        "standbyMin": standby.min if standby else "",
-        "standbyP50": standby.p50 if standby else "",
-        "standbyMean": standby.mean if standby else "",
-        "standbyP90": standby.p90 if standby else "",
-        "standbyMax": standby.max if standby else "",
-        "singleRiderP50": single.p50 if single else "",
-        "singleRiderMax": single.max if single else "",
+        **_cells(row),
     }
 
 
@@ -152,7 +225,12 @@ class Writer:
         self._ident = ident
         self._csv = None
         if fmt == "csv":
-            self._csv = csv.DictWriter(handle, fieldnames=CSV_COLUMNS)
+            # LF, not the csv module's default CRLF. RFC 4180 says CRLF and
+            # every reader accepts either, but this command also writes NDJSON
+            # with LF, and the JavaScript SDK's identical command writes LF -- so
+            # the same park in two formats and two languages should not come back
+            # as three different byte streams.
+            self._csv = csv.DictWriter(handle, fieldnames=CSV_COLUMNS, lineterminator="\n")
             if write_header:
                 self._csv.writeheader()
 
@@ -276,7 +354,9 @@ class _StateFile(NamedTuple):
     end: Day
 
 
-def _record(sf: _StateFile, last_day: date | None, *, complete: bool) -> None:
+def _record(
+    sf: _StateFile, last_day: date | None, resume_from: str | None, *, complete: bool
+) -> None:
     """Write the state file. `complete` is the fact the old checkpoint could not express.
 
     `sf.start` is the ORIGINAL start of the range, not the day a resumed run
@@ -290,6 +370,7 @@ def _record(sf: _StateFile, last_day: date | None, *, complete: bool) -> None:
         start=str(sf.start),
         end=str(sf.end),
         last_day=last_day.isoformat() if last_day else None,
+        resume_from=resume_from,
         complete=complete,
     )
 
@@ -317,6 +398,20 @@ def _say_empty(end: Day, start: Day | None = None) -> None:
         f"  nothing in your window: this park's data ends {end}{reach} — skipping",
         file=sys.stderr,
     )
+
+
+def _next_page_start(next_url: str | None) -> str | None:
+    """The day a paged history URL starts on, or None if it does not say.
+
+    The SDK follows the server's `next` verbatim; all that is wanted here is its
+    `from`, to write into the state file as a bare day. A day keeps the state
+    readable and sends a resumed run down the same code path as a first run.
+    """
+    if not next_url:
+        return None
+    query = parse_qs(urlparse(next_url).query)
+    values = query.get("from") or []
+    return values[0] if values and values[0] else None
 
 
 class _Plan(NamedTuple):
@@ -376,9 +471,20 @@ def _decide(
         return 1
 
     resuming = bool(state) and same_format and not state.get("complete")
-    last_written = state.get("last_day") if resuming else None
+    # THE PAGE BOUNDARY, not the newest row. `last_day` is the highest date
+    # written; the page it came from covered further, because an entity that
+    # stopped reporting has no rows for the tail days. Resuming at `last_day`
+    # re-fetches a day already in the file and appends every row of it again --
+    # on the exit-75 path, which is the ordinary path for a long back fill, and
+    # it breaks the (entityId, date) key the file is documented to have.
+    #
+    # `last_day` stays as the fallback for the two cases with no boundary
+    # recorded: a state file written by 3.3.0, and a run that died part-way
+    # through its FIRST page. One duplicated day beats starting from the top and
+    # appending a second copy of the whole archive.
+    resume_at = (state.get("resume_from") or state.get("last_day")) if resuming else None
     return _Plan(
-        start=last_written or archive_from,
+        start=resume_at or archive_from,
         has_rows=file_exists and resuming,
         prior_start=state.get("start") if resuming else None,
     )
@@ -409,6 +515,7 @@ class _Progress:
     def __init__(self) -> None:
         self.written = 0
         self.last_day: date | None = None
+        self.resume_from: str | None = None
         self.skipped = False
 
 
@@ -420,9 +527,18 @@ def _stream(job: _Job, start: Day, progress: _Progress) -> None:
     a reader had to. This is the streaming.
     """
 
+    def note_page(page: HistoryPage) -> None:
+        """Checkpoint, called once every row of a page is written.
+
+        The day the NEXT page starts on, taken from the server's own `next` URL,
+        so a resumed run asks for nothing twice. None on the last page, where
+        there is nothing left to carry on from.
+        """
+        progress.resume_from = _next_page_start(page.next_url)
+
     def write_rows(writer: Writer, first_day: Day) -> None:
         """Stream one range into the file. Raises whatever the SDK raises."""
-        for ref, row in job.history.days_with_entities(first_day, job.end):
+        for ref, row in job.history.days_with_entities(first_day, job.end, on_page=note_page):
             writer.write(ref, row)
             progress.written += 1
             # MAX, not last-seen. `_daily_rows` walks entities and then each
@@ -526,13 +642,29 @@ def backfill_park(
     except BudgetExhaustedError as exc:
         # The budget is hourly, so a spent one can be most of an hour from
         # resetting. Record how far we got and exit 75 rather than sleeping.
-        _record(sf, progress.last_day, complete=False)
+        _record(sf, progress.last_day, progress.resume_from, complete=False)
         wait = exc.retry_after or 0
         print(
             f"  budget spent; rerun the same command in {wait / 60:.0f} min to continue",
             file=sys.stderr,
         )
         return EX_TEMPFAIL
+    # ORDER MATTERS AND IT BIT ONCE: BudgetExhaustedError subclasses
+    # RateLimitError, so this clause above the budget one catches it first and
+    # turns exit 75 into a traceback and exit 1 -- the precise regression the
+    # budget handler exists to prevent.
+    except (ThemeParksError, OSError):
+        # Every other failure still records where it got to, or the next run
+        # starts over and appends a second partial copy. And AN EMPTY FILE IS A
+        # LIE: opening the file created it before the first request, so a park
+        # that failed with nothing written left a 0-byte file that reads as
+        # "this park has no history" -- on a six-park destination the customer
+        # counts six files and never sees which one is empty.
+        if progress.last_day is not None:
+            _record(sf, progress.last_day, progress.resume_from, complete=False)
+        if progress.written == 0:
+            out_path.unlink(missing_ok=True)
+        raise
 
     if progress.skipped and progress.written == 0:
         out_path.unlink(missing_ok=True)
@@ -541,7 +673,7 @@ def backfill_park(
 
     # Completion is RECORDED, never inferred from a missing file. That is the
     # distinction the old checkpoint could not make.
-    _record(sf, progress.last_day, complete=True)
+    _record(sf, progress.last_day, None, complete=True)
     print(f"  done: {progress.written} rows -> {out_path}", file=sys.stderr)
     return 0
 
@@ -638,7 +770,15 @@ def _by_name(catalogue: list[tuple[str, str, str, str]], wanted: str) -> list[tu
     if len(exact_park) == 1:
         return exact_park
 
-    park_hits = [(pid, pname) for pid, pname, _, _ in catalogue if lowered in _normalize(pname)]
+    # WHEN THE EXACT NAME IS AMBIGUOUS, the exact matches ARE the candidates.
+    # "Disneyland Park" is two live parks, Anaheim and Paris; widening to
+    # substrings adds Hong Kong Disneyland Park, which is not what was typed and
+    # pads the one list whose whole job is "which of these did you mean".
+    park_hits = (
+        exact_park
+        if len(exact_park) > 1
+        else [(pid, pname) for pid, pname, _, _ in catalogue if lowered in _normalize(pname)]
+    )
     dest_hits = {did: dname for _, _, did, dname in catalogue if lowered in _normalize(dname)}
     if len(dest_hits) == 1 and not park_hits:
         return parks_in(next(iter(dest_hits)))
@@ -694,25 +834,29 @@ def _looks_like_id(value: str) -> bool:
     return len(value) == UUID_LENGTH and value.count("-") == UUID_DASHES
 
 
-def _print_list(tp: ThemeParks, needle: str | None) -> int:
+def _print_list(catalogue: list[tuple[str, str, str, str]], needle: str | None) -> int:
     """Parks grouped under their destination, so a destination id is visible too."""
-    catalogue = _catalogue(tp)
+    shown = catalogue
     if needle:
         lowered = _normalize(needle)
-        catalogue = [
-            c for c in catalogue if lowered in _normalize(c[1]) or lowered in _normalize(c[3])
-        ]
-    if not catalogue:
+        shown = [c for c in catalogue if lowered in _normalize(c[1]) or lowered in _normalize(c[3])]
+    if not shown:
         print(f'nothing matching "{needle}"', file=sys.stderr)
         return 1
 
     by_dest: dict[tuple[str, str], list[tuple[str, str]]] = {}
-    for pid, pname, did, dname in catalogue:
+    for pid, pname, did, dname in shown:
         by_dest.setdefault((did, dname), []).append((pid, pname))
     for (did, dname), parks in sorted(by_dest.items(), key=lambda kv: kv[0][1]):
-        # The destination line is indented left of its parks and labelled, so it
-        # reads as "pass this to get all of them" rather than as another park.
-        print(f"{did}  {dname}  <- destination: all {len(parks)} parks")
+        # THE TOTAL, counted from the UNFILTERED catalogue. Counting the filtered
+        # rows made `--list epcot` print "all 1 parks" for a destination with
+        # six, on the one line whose entire job is that number -- and that line
+        # is an instruction to pass the destination id, so the number is what the
+        # reader decides on.
+        total = sum(1 for c in catalogue if c[2] == did)
+        note = "" if total == len(parks) else f" ({len(parks)} shown)"
+        word = "park" if total == 1 else "parks"
+        print(f"{did}  {dname}  <- destination: all {total} {word}{note}")
         for pid, pname in sorted(parks, key=lambda p: p[1]):
             print(f"    {pid}  {pname}")
     return 0
@@ -790,6 +934,12 @@ def main(argv: list[str] | None = None) -> int:
         " write is never touched.",
     )
     parser.add_argument(
+        "--version",
+        action="version",
+        version=f"themeparks-backfill {PACKAGE_VERSION}",
+        help="print the version and exit",
+    )
+    parser.add_argument(
         "--out",
         type=Path,
         default=Path("."),
@@ -804,7 +954,7 @@ def main(argv: list[str] | None = None) -> int:
     # key and before you have decided to pay for anything.
     if args.list_parks is not None:
         with ThemeParks(api_key=args.api_key, user_agent=USER_AGENT) as tp:
-            return _print_list(tp, args.list_parks or None)
+            return _print_list(_catalogue(tp), args.list_parks or None)
 
     if not args.parks:
         parser.error("which park or destination? try: themeparks-backfill --list disney")
@@ -871,14 +1021,67 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
 
-        for park_id, pname in targets:
-            status = backfill_park(tp, _Park(park_id, pname), args.out, args.format, args.overwrite)
-            if status != 0:
-                # Stop at the first exhausted budget. Carrying on to the next
-                # park only spends the retry-after on 429s.
-                return status
+        return _run_all(tp, targets, args)
     return 0
 
 
+def _run_all(tp: ThemeParks, targets: list[tuple[str, str]], args: Any) -> int:
+    """Back fill every target, and report what did not finish.
+
+    ONE PARK'S FAILURE IS NOT THE DESTINATION'S. A 500 on Animal Kingdom used to
+    abandon the run, so the parks after it were never attempted: the customer got
+    a partial download, a traceback, and no statement of which parks were
+    missing. Every park is tried, what failed is named at the end, and the exit
+    code still says something went wrong.
+    """
+    failed: list[str] = []
+    for park_id, pname in targets:
+        try:
+            status = backfill_park(tp, _Park(park_id, pname), args.out, args.format, args.overwrite)
+        except (ThemeParksError, OSError) as exc:
+            print(f"{park_id}: {exc}", file=sys.stderr)
+            failed.append(pname)
+            continue
+        if status == EX_TEMPFAIL:
+            # A spent budget stops everything: the next park would spend the
+            # retry-after for nothing, and every state file says where it got to.
+            return status
+        if status != 0:
+            failed.append(pname)
+    if failed:
+        print(
+            f"\n{len(failed)} of {len(targets)} did not finish: {', '.join(failed)}\n"
+            f"  the rest are written. Run the same command again to retry just these.",
+            file=sys.stderr,
+        )
+        return 1
+    return 0
+
+
+def cli() -> int:
+    """The installed entry point: `main`, with no traceback for a bad request.
+
+    An unreachable API, a timed-out connection or a mistyped id used to print a
+    nine-frame traceback. A traceback is a bug report about this command; none of
+    these are bugs in it, and a customer who has just paid reads one as the tool
+    being broken.
+    """
+    try:
+        return main()
+    except KeyboardInterrupt:
+        print("\nstopped. Run the same command again to continue.", file=sys.stderr)
+        return 130
+    except ThemeParksError as exc:
+        # Every SDK failure descends from this one, so a new kind of failure cannot
+        # slip past and become a traceback.
+        print(f"{exc}", file=sys.stderr)
+        return 1
+    except OSError as exc:
+        # A full disk or an unwritable --out directory. Five years of one park is
+        # a few hundred MB, so this is not hypothetical.
+        print(f"cannot write the output: {exc}", file=sys.stderr)
+        return 1
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(cli())

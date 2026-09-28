@@ -20,18 +20,32 @@ proves only that the two are consistent.
 from __future__ import annotations
 
 import csv
+import inspect
 import json
 from datetime import date
 from pathlib import Path
 
 import pytest
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
-from themeparks import APIError, BudgetExhaustedError, RateLimitError, backfill
-from themeparks._ergonomic.history import EntityRef, HistorySpan
+from themeparks import APIError, BudgetExhaustedError, NetworkError, RateLimitError, backfill
+from themeparks._client import PACKAGE_VERSION
+from themeparks._ergonomic.history import EntityRef, HistoryApi, HistoryPage, HistorySpan
 from themeparks._generated.models import HistoryDailyRow, HistoryErrorWindowExceeded
 from themeparks._transport import _format_error_message
 from themeparks.backfill import _Park
+
+
+def _next_url(start: str | None) -> str | None:
+    """A `next` URL in the shape the API sends, or None on the last page.
+
+    The command reads the day out of this URL rather than doing date arithmetic,
+    so a stub that hands it a bare day would test a code path that does not exist.
+    """
+    if start is None:
+        return None
+    return f"https://api.themeparks.wiki/v1/entity/park-1/history/daily?from={start}&to=2026-09-28"
+
 
 # CAPTURED FROM PRODUCTION, 2026-09-28: anonymous GET of
 # /v1/entity/7340550b-c14d-4def-80bb-acdb51d49a66/history/daily starting 2021-07-03.
@@ -98,6 +112,11 @@ class _History:
         self.floor = floor
         self.calls: list[str] = []
         self.ends: list[str] = []
+        # One page ending at `through`, with nothing after it, unless a test says
+        # otherwise. Each entry is (this page's last day, the next page's start).
+        self.pages: list[tuple[str, str | None]] = [(through, None)]
+        self.raise_on_page: str | None = None
+        self.raise_on_page_with: Exception = RuntimeError("not set")
 
     def span(self) -> HistorySpan:
         return HistorySpan(
@@ -106,19 +125,29 @@ class _History:
             date.fromisoformat(self.through),
         )
 
-    def days_with_entities(self, start, end):
+    def days_with_entities(self, start=None, end=None, *, max_wait=120.0, on_page=None):
         """Mirrors the real signature: the NAME comes from the response.
 
         Not `days()`. The command switched to `days_with_entities` so a row is
         labelled with the name the history response gave for it, rather than the
         park's current children list -- rides get renamed and old rows must keep
         the name they were recorded under.
+
+        `pages` drives the paging: one entry per page, `(last day it covered, the
+        day the next page starts on or None)`. The default is one page, so a test
+        that does not care about paging does not have to say so. `on_page` fires
+        AFTER that page's rows, which is the contract the checkpoint depends on.
         """
         self.calls.append(str(start))
         self.ends.append(str(end))
         if self.floor is not None and str(start) < self.floor:
             raise _window_403(self.floor)
-        yield (EntityRef("ent-1", "Test Coaster", "ATTRACTION"), _row(str(start)))
+        for covered, next_from in self.pages:
+            if self.raise_on_page is not None and next_from == self.raise_on_page:
+                raise self.raise_on_page_with
+            yield (EntityRef("ent-1", "Test Coaster", "ATTRACTION"), _row(covered))
+            if on_page is not None:
+                on_page(HistoryPage(str(start), covered, _next_url(next_from)))
 
 
 class _Entity:
@@ -237,7 +266,7 @@ class TestBackfillPark:
         hist = _History(archive_from="2025-01-01", through="2026-09-28", floor=None)
         calls = {"n": 0}
 
-        def days_with_entities(start, end):
+        def days_with_entities(start=None, end=None, *, max_wait=120.0, on_page=None):
             calls["n"] += 1
             yield (EntityRef("ent-1", "Test Coaster", "ATTRACTION"), _row("2025-01-01"))
             raise _window_403("2025-08-25")
@@ -371,7 +400,9 @@ class TestNdjsonPayload:
         hist = _History(archive_from="2025-01-01", through="2026-09-28", floor=None)
         backfill.backfill_park(_Client(hist), _Park("park-id", "Park Name"), tmp_path, "ndjson")
         line = json.loads((tmp_path / "park-id.ndjson").read_text(encoding="utf-8").splitlines()[0])
-        row = _row("2025-01-01")
+        # The stub dates its row at the last day of the page it belongs to, which
+        # is what a real response does: a page's rows run to `range.to`.
+        row = _row("2026-09-28")
         assert line == {
             "parkId": "park-id",
             "parkName": "Park Name",
@@ -388,7 +419,7 @@ class TestBudgetExhaustion:
     def _hist_that_runs_out(self) -> _History:
         hist = _History(archive_from="2025-01-01", through="2026-09-28", floor=None)
 
-        def days_with_entities(start, end):
+        def days_with_entities(start=None, end=None, *, max_wait=120.0, on_page=None):
             hist.calls.append(str(start))
             # DELIBERATELY out of order, and the second entity's days end EARLIER.
             # That is the real shape: `_daily_rows` walks entities and then each
@@ -418,6 +449,11 @@ class TestBudgetExhaustion:
         # 2025-02-14, so recording "last" instead of "max" would rewind the resume
         # point by three weeks and re-download them.
         assert state["last_day"] == "2025-03-09"
+        # The budget died part-way through the FIRST page, so no page boundary was
+        # ever reported and there is nothing exact to resume from. `last_day` is
+        # the documented fallback for precisely this: one duplicated day, rather
+        # than starting from the top and appending a second copy of everything.
+        assert state["resume_from"] is None
 
     def test_a_spent_budget_on_the_coverage_call_also_returns_75(self, tmp_path: Path) -> None:
         # span() is the FIRST request a resumed run makes, while the hourly window
@@ -442,3 +478,316 @@ class TestEmptyWindowBeforeAnyRequest:
         assert code == 0
         assert hist.calls == [], "asked the API for a range it had already ruled out"
         assert "nothing in your window" in capsys.readouterr().err
+
+
+class TestStubsMatchTheRealSdk:
+    """A stand-in that has drifted from the real object proves nothing.
+
+    This is the fifth time a hand-written double and the code it stood in for
+    disagreed, and one of those shipped: a 403 handler written from a traceback
+    read a body shape the API never sends, and nine tests passed against a
+    fixture retyped from the same traceback. A stub whose signature is checked
+    against the real method cannot silently accept a call the SDK would reject.
+    """
+
+    def test_the_history_stub_takes_what_the_real_method_takes(self) -> None:
+        real = inspect.signature(HistoryApi.days_with_entities)
+        stub = inspect.signature(_History.days_with_entities)
+        real_params = [p for name, p in real.parameters.items() if name != "self"]
+        stub_params = [p for name, p in stub.parameters.items() if name != "self"]
+        assert [p.name for p in stub_params] == [p.name for p in real_params]
+        assert [p.kind for p in stub_params] == [p.kind for p in real_params]
+
+    def test_the_stub_refuses_a_call_the_real_method_would_refuse(self) -> None:
+        # Guard the guard: if the stub swallowed **kwargs the check above passes
+        # while the stub accepts anything, which is the failure it exists to stop.
+        hist = _History(archive_from="2025-01-01", through="2026-01-01", floor=None)
+        with pytest.raises(TypeError):
+            list(hist.days_with_entities("2025-01-01", "2026-01-01", nonsense=True))
+
+
+class TestResumeCheckpoint:
+    """Where a rerun carries on from. It was the newest ROW, which duplicates."""
+
+    def _paged(self) -> _History:
+        hist = _History(archive_from="2025-01-01", through="2026-09-28", floor=None)
+        # Two pages, the real shape: the first covers through 2025-01-31 and the
+        # server says carry on at 2025-02-01. The budget then runs out on the
+        # second page, after the first has been written in full.
+        hist.pages = [("2025-01-31", "2025-02-01"), ("2025-03-02", None)]
+        hist.raise_on_page = None
+        return hist
+
+    def test_records_the_day_the_next_page_starts_on(self, tmp_path: Path) -> None:
+        hist = self._paged()
+        hist.raise_on_page = None
+        hist.pages = [("2025-01-31", "2025-02-01")]
+        backfill.backfill_park(_Client(hist), _Park("p", "P"), tmp_path, "ndjson")
+        state = json.loads((tmp_path / f"p{backfill.STATE_SUFFIX}").read_text(encoding="utf-8"))
+        # Complete, so there is nothing to carry on from -- but the page it read
+        # said 2025-02-01, and the newest row said 2025-01-31. Those differ, which
+        # is the whole point.
+        assert state["complete"] is True
+
+    def test_a_rerun_asks_for_the_page_boundary_not_the_newest_row(self, tmp_path: Path) -> None:
+        # THE DEFECT. An entity that stopped reporting has no rows for the tail
+        # days of its page, so the newest row is earlier than the page covered.
+        # Resuming there re-fetches days already in the file and appends every row
+        # of them again, breaking the (entityId, date) key the file is documented
+        # to have -- on the exit-75 path, which is the ordinary path for a long
+        # back fill rather than an edge case.
+        state_path = tmp_path / f"p{backfill.STATE_SUFFIX}"
+        (tmp_path / "p.ndjson").write_text('{"a": 1}\n', encoding="utf-8")
+        state_path.write_text(
+            json.dumps(
+                {
+                    "format": "ndjson",
+                    "start": "2025-01-01",
+                    "end": "2026-09-28",
+                    "last_day": "2025-01-28",
+                    "resume_from": "2025-02-01",
+                    "complete": False,
+                }
+            ),
+            encoding="utf-8",
+        )
+        hist = _History(archive_from="2025-01-01", through="2026-09-28", floor=None)
+        backfill.backfill_park(_Client(hist), _Park("p", "P"), tmp_path, "ndjson")
+        assert hist.calls == ["2025-02-01"], "resumed from the newest row, not the boundary"
+
+    def test_falls_back_to_last_day_for_a_state_file_without_a_boundary(
+        self, tmp_path: Path
+    ) -> None:
+        # 3.3.0 wrote no resume_from, and a run that dies inside its first page
+        # never reports one. One duplicated day beats starting from the top and
+        # appending a second copy of the whole archive.
+        (tmp_path / "p.ndjson").write_text('{"a": 1}\n', encoding="utf-8")
+        (tmp_path / f"p{backfill.STATE_SUFFIX}").write_text(
+            json.dumps(
+                {
+                    "format": "ndjson",
+                    "start": "2025-01-01",
+                    "end": "2026-09-28",
+                    "last_day": "2025-01-28",
+                    "complete": False,
+                }
+            ),
+            encoding="utf-8",
+        )
+        hist = _History(archive_from="2025-01-01", through="2026-09-28", floor=None)
+        backfill.backfill_park(_Client(hist), _Park("p", "P"), tmp_path, "ndjson")
+        assert hist.calls == ["2025-01-28"]
+
+    def test_the_boundary_is_read_from_the_servers_own_url(self) -> None:
+        # No date arithmetic anywhere: the server says where the next page starts
+        # and that string is what gets recorded.
+        url = (
+            "https://api.themeparks.wiki/v1/entity/75ea578a-adc8-4116-a54d-dccb60765ef9"
+            "/history/daily?from=2026-09-01&to=2026-09-20"
+        )
+        assert backfill._next_page_start(url) == "2026-09-01"
+        assert backfill._next_page_start(None) is None
+        assert backfill._next_page_start("") is None
+        assert backfill._next_page_start("https://api.themeparks.wiki/v1/x") is None
+
+
+class TestEveryFieldReachesTheFile:
+    """The CSV carried 26 of the 41 columns the schema defines."""
+
+    def test_columns_are_derived_from_the_model(self) -> None:
+        # Hand-typed, the list drifted three ways at once: unknownMinutes and the
+        # whole inParkHours block missing, extremeWaits missing, and singleRider
+        # carrying two of its five percentiles while standby carried all five.
+        # Ten of thirty-six data fields absent from a file people pay for.
+        for name in ("unknownMinutes", "extremeWaitsStandby", "inParkHoursScheduledMinutes"):
+            assert name in backfill.CSV_COLUMNS, name
+        for prefix in ("standby", "singleRider", "inParkHoursStandby", "inParkHoursSingleRider"):
+            stats = [c[len(prefix) :] for c in backfill.DATA_COLUMNS if c.startswith(prefix)]
+            assert stats[:5] == ["Min", "P50", "Mean", "P90", "Max"], prefix
+
+    def test_every_scalar_in_the_model_has_a_column(self) -> None:
+        # THE DRIFT GATE. Regenerate the models and the columns follow; if a field
+        # ever stops being covered, this fails rather than losing it quietly.
+        def scalars(model, prefix=""):
+            out = []
+            for name, field in model.model_fields.items():
+                inner = backfill._stats_model(field.annotation)
+                head = name if not prefix else f"{prefix}{name[0].upper()}{name[1:]}"
+                out.extend(scalars(inner, head) if inner is not None else [head])
+            return out
+
+        assert sorted(scalars(HistoryDailyRow)) == sorted(backfill.DATA_COLUMNS)
+        assert issubclass(HistoryDailyRow, BaseModel)
+
+    def test_an_absent_stats_block_is_empty_cells_never_zeroes(self, tmp_path: Path) -> None:
+        # A zero would read as "measured, and it was nothing". Absent means no
+        # wait was in force, or the park published no hours that day.
+        hist = _History(archive_from="2025-01-01", through="2026-09-28", floor=None)
+        backfill.backfill_park(_Client(hist), _Park("p", "P"), tmp_path, "csv")
+        rows = list(csv.DictReader((tmp_path / "p.csv").open(encoding="utf-8")))
+        assert rows[0]["inParkHoursStandbyP50"] == ""
+        assert rows[0]["extremeWaitsStandby"] == ""
+        assert rows[0]["entityName"] == "Test Coaster"
+
+    def test_the_header_is_the_column_list(self, tmp_path: Path) -> None:
+        hist = _History(archive_from="2025-01-01", through="2026-09-28", floor=None)
+        backfill.backfill_park(_Client(hist), _Park("p", "P"), tmp_path, "csv")
+        header = (tmp_path / "p.csv").read_text(encoding="utf-8").splitlines()[0]
+        assert header.split(",") == backfill.CSV_COLUMNS
+
+
+class TestTheCommandIdentifiesItself:
+    def test_the_user_agent_names_the_command_and_the_sdk(self) -> None:
+        # It was the literal "themeparks-backfill/1": a hardcoded 1 that could
+        # never match a release, and it REPLACED the SDK's user agent, so a
+        # support question about a bad download had no version at either end.
+        assert (
+            f"themeparks-backfill/{PACKAGE_VERSION} themeparks-sdk-py/{PACKAGE_VERSION}"
+        ) == backfill.USER_AGENT
+        assert "/1" not in backfill.USER_AGENT.replace(PACKAGE_VERSION, "")
+
+    def test_version_prints_the_package_version(self, capsys) -> None:
+        with pytest.raises(SystemExit) as caught:
+            backfill.main(["--version"])
+        assert caught.value.code == 0
+        assert PACKAGE_VERSION in capsys.readouterr().out
+
+
+class TestFailureIsNotATraceback:
+    """A customer who has just paid reads a traceback as the tool being broken."""
+
+    def test_an_unreachable_api_is_a_sentence_and_exit_1(self, capsys, monkeypatch) -> None:
+        def boom(argv=None):
+            raise NetworkError("connection refused")
+
+        monkeypatch.setattr(backfill, "main", boom)
+        assert backfill.cli() == 1
+        err = capsys.readouterr().err
+        assert "connection refused" in err
+        assert "Traceback" not in err
+
+    def test_ctrl_c_says_how_to_continue(self, capsys, monkeypatch) -> None:
+        def stop(argv=None):
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(backfill, "main", stop)
+        assert backfill.cli() == 130
+        assert "run the same command again" in capsys.readouterr().err.lower()
+
+    def test_a_failed_park_leaves_no_empty_file(self, tmp_path: Path) -> None:
+        # Opening the file created it before the first request, so a park that
+        # failed with nothing written left a 0-byte file that reads as "this park
+        # has no history".
+        hist = _History(archive_from="2025-01-01", through="2026-09-28", floor=None)
+
+        def days_with_entities(start=None, end=None, *, max_wait=120.0, on_page=None):
+            raise APIError("500 Server Error", status=500, body={}, url="u")
+            yield  # pragma: no cover - never reached, keeps this a generator
+
+        hist.days_with_entities = days_with_entities  # type: ignore[assignment]
+        with pytest.raises(APIError):
+            backfill.backfill_park(_Client(hist), _Park("p", "P"), tmp_path, "ndjson")
+        assert not (tmp_path / "p.ndjson").exists(), "left a 0-byte file behind"
+
+
+class TestListing:
+    def test_the_destination_total_is_counted_before_the_filter(self, capsys) -> None:
+        # `--list epcot` printed "all 1 parks" for a destination with six, on the
+        # one line whose entire job is that number -- and that line tells the
+        # reader to pass the destination id, so the number is what they act on.
+        catalogue = [
+            ("p1", "EPCOT", "d1", "Walt Disney World Resort"),
+            ("p2", "Magic Kingdom Park", "d1", "Walt Disney World Resort"),
+            ("p3", "Disney's Hollywood Studios", "d1", "Walt Disney World Resort"),
+        ]
+        assert backfill._print_list(catalogue, "EPCOT") == 0
+        out = capsys.readouterr().out
+        assert "all 3 parks (1 shown)" in out
+
+    def test_nothing_matching_is_exit_1(self, capsys) -> None:
+        assert backfill._print_list([("p1", "EPCOT", "d1", "WDW")], "zzz") == 1
+
+
+class TestAmbiguousNames:
+    def test_an_exact_name_two_parks_share_lists_only_those_two(self) -> None:
+        # Widening to substrings adds Hong Kong Disneyland Park, which is not what
+        # was typed, to the one list whose job is "which of these did you mean".
+        catalogue = [
+            ("p1", "Disneyland Park", "d1", "Disneyland Resort"),
+            ("p2", "Disneyland Park", "d2", "Disneyland Paris"),
+            ("p3", "Hong Kong Disneyland Park", "d3", "Hong Kong Disneyland Parks"),
+        ]
+        with pytest.raises(SystemExit) as caught:
+            backfill._resolve(catalogue, "Disneyland Park")
+        message = str(caught.value)
+        assert "matches 2" in message
+        assert "Hong Kong" not in message
+        assert "Disneyland Resort" in message and "Disneyland Paris" in message
+
+
+class TestOneParkFailingIsNotTheRunFailing:
+    """A 500 on park three used to abandon parks four, five and six."""
+
+    class _Args:
+        def __init__(self, out: Path) -> None:
+            self.out = out
+            self.format = "ndjson"
+            self.overwrite = False
+
+    def test_every_park_is_tried_and_the_failures_are_named(
+        self, tmp_path: Path, capsys, monkeypatch
+    ) -> None:
+        attempted: list[str] = []
+
+        def fake_backfill(tp, park, out_dir, fmt, overwrite=False):
+            attempted.append(park.id)
+            if park.id == "p2":
+                raise APIError("500 Server Error", status=500, body={}, url="u")
+            return 0
+
+        monkeypatch.setattr(backfill, "backfill_park", fake_backfill)
+        targets = [("p1", "One"), ("p2", "Two"), ("p3", "Three")]
+        code = backfill._run_all(None, targets, self._Args(tmp_path))
+        assert attempted == ["p1", "p2", "p3"], "stopped at the first failure"
+        assert code == 1
+        err = capsys.readouterr().err
+        assert "1 of 3 did not finish: Two" in err
+
+    def test_a_spent_budget_stops_the_whole_run(self, tmp_path: Path, monkeypatch) -> None:
+        # The opposite rule, and it matters: the next park would spend the
+        # retry-after on a 429 for nothing, and every state file already says
+        # where it got to.
+        attempted: list[str] = []
+
+        def fake_backfill(tp, park, out_dir, fmt, overwrite=False):
+            attempted.append(park.id)
+            return backfill.EX_TEMPFAIL
+
+        monkeypatch.setattr(backfill, "backfill_park", fake_backfill)
+        code = backfill._run_all(None, [("p1", "One"), ("p2", "Two")], self._Args(tmp_path))
+        assert code == backfill.EX_TEMPFAIL
+        assert attempted == ["p1"]
+
+    def test_all_good_is_exit_0_and_says_nothing(self, tmp_path: Path, capsys, monkeypatch) -> None:
+        monkeypatch.setattr(backfill, "backfill_park", lambda *a, **k: 0)
+        code = backfill._run_all(None, [("p1", "One"), ("p2", "Two")], self._Args(tmp_path))
+        assert code == 0
+        assert "did not finish" not in capsys.readouterr().err
+
+
+class TestTimestampsMatchTheApi:
+    def test_utc_is_written_the_way_the_api_sends_it(self, tmp_path: Path) -> None:
+        # `+00:00` and `Z` are the same instant and not the same string. The API
+        # sends `Z`, the JavaScript SDK's identical command passes it through, and
+        # Python's isoformat() turned it into `+00:00` -- so the same park exported
+        # in two languages came back as two different files, 39,201 lines apart on
+        # a five-year EPCOT run, for no difference in meaning.
+        hist = _History(archive_from="2025-01-01", through="2026-09-28", floor=None)
+        backfill.backfill_park(_Client(hist), _Park("p", "P"), tmp_path, "csv")
+        row = next(csv.DictReader((tmp_path / "p.csv").open(encoding="utf-8")))
+        assert row["firstOperatingAt"].endswith("Z")
+        assert "+00:00" not in row["firstOperatingAt"]
+
+    def test_a_plain_date_stays_a_plain_date(self) -> None:
+        assert backfill._scalar(date(2026, 9, 28)) == "2026-09-28"
+        assert backfill._scalar(None) == ""
