@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Union, get_args, get_type_hints
+from typing import Any, Union, get_args
 
 from themeparks._generated import models
 
@@ -31,6 +31,16 @@ def _declared() -> list[tuple[str, str, str]]:
     ]
 
 
+def _annotation(model_name: str, field: str) -> Any:
+    """The field's type as pydantic resolved it.
+
+    Not `typing.get_type_hints`: the models are written `float | None`, which
+    3.9 cannot evaluate. Pydantic already resolved it, with the backport the
+    package depends on for exactly this.
+    """
+    return getattr(models, model_name).model_fields[field].annotation
+
+
 def _parse(text: str) -> set[type]:
     return {_NAMES[part.strip()] for part in text.split("|")}
 
@@ -42,7 +52,7 @@ def test_the_table_was_found() -> None:
 
 def test_every_stated_type_is_the_model_type() -> None:
     for model_name, field, stated in _declared():
-        hint = get_type_hints(getattr(models, model_name))[field]
+        hint = _annotation(model_name, field)
         actual = set(get_args(hint)) if get_args(hint) else {hint}
         assert _parse(stated) == actual, f"README says {model_name}.{field}: {stated}"
 
@@ -50,5 +60,5 @@ def test_every_stated_type_is_the_model_type() -> None:
 def test_the_model_type_is_what_the_spec_says() -> None:
     # `number` in the spec. If the generator ever maps it to int, the README
     # line above has to change with it, and this says why it failed.
-    hint = get_type_hints(models.StandbyQueue)["waitTime"]
+    hint = _annotation("StandbyQueue", "waitTime")
     assert hint == Union[float, None]
