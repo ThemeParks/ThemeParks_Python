@@ -197,8 +197,8 @@
     {
       "name": "a 4.0 file keeps its partial tail",
       "file": "themeparks/backfill.py",
-      "find": "        _trim_after(out_path, fmt, keep_through)\n",
-      "replace": "        pass\n",
+      "find": "if _trim_after(out_path, fmt, keep_through) == 0:",
+      "replace": "if False:",
       "why": "The partial days 4.0 wrote stay in the file for good, next to nothing that would ever correct them."
     },
     {
@@ -221,6 +221,20 @@
       "find": "return {entity.id: entity.opening for entity in entities}",
       "replace": "return {}",
       "why": "The opening is the state before the first change; without it a day cannot be rebuilt from raw history."
+    },
+    {
+      "name": "a 4.0 file wholly inside the cut is trimmed to nothing",
+      "file": "themeparks/backfill.py",
+      "find": "if _trim_after(out_path, fmt, keep_through) == 0:",
+      "replace": "if _trim_after(out_path, fmt, keep_through) == -1:",
+      "why": "Every anonymous 4.0 file: an empty file whose state continues from a day the key can no longer read, refused on every later run."
+    },
+    {
+      "name": "a continued file jumps to the key's first day",
+      "file": "themeparks/backfill.py",
+      "find": "            if job.resumed:\n",
+      "replace": "            if False:\n",
+      "why": "A cron that missed more nights than the key's window carries on from the key's first day, leaving days missing from the middle of a file whose state claims them."
     }
   ]
 }

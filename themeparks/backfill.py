@@ -715,7 +715,9 @@ def _decide(out_path: Path, state_path: Path, fmt: str, overwrite: bool, ask: _A
         state = {}
 
     if state and _upgradable(state, fmt):
-        state = _upgrade_v1(state, out_path, state_path, fmt)
+        upgraded = _upgrade_v1(state, out_path, state_path, fmt)
+        state = upgraded if upgraded is not None else {}
+        file_exists = upgraded is not None
 
     # A file we have no record of writing. Refusing is the only safe answer:
     # appending doubles it, truncating throws away someone's data.
@@ -836,7 +838,7 @@ def _upgradable(state: dict[str, Any], fmt: str) -> bool:
 
 def _upgrade_v1(
     state: dict[str, Any], out_path: Path, state_path: Path, fmt: str
-) -> dict[str, Any]:
+) -> dict[str, Any] | None:
     """Make a 4.0 file one this build can continue, replacing its unsettled tail.
 
     4.0 ended every run at `retrievableThrough`, usually today, so the last few
@@ -851,6 +853,11 @@ def _upgrade_v1(
     those days again, final this time. A file whose newest row is already older
     than the cut, a park that stopped reporting long ago, is not read at all.
 
+    A file that lies WHOLLY inside the cut, as every anonymous 7-day file does,
+    is downloaded again instead: None, with both files removed. Trimmed, it
+    would be empty with a state continuing from a day the key may no longer
+    read, which a continued file is not allowed to skip past.
+
     The new state is written straight away, so a run that fails after this
     point does not trim the same file twice.
     """
@@ -861,7 +868,10 @@ def _upgrade_v1(
     keep_through = (date.fromisoformat(str(end)) - timedelta(days=V1_UNSETTLED_DAYS)).isoformat()
     last_day = state.get("lastDay")
     if last_day is None or str(last_day) > keep_through:
-        _trim_after(out_path, fmt, keep_through)
+        if _trim_after(out_path, fmt, keep_through) == 0:
+            out_path.unlink(missing_ok=True)
+            state_path.unlink(missing_ok=True)
+            return None
         upgraded["lastDay"] = keep_through if last_day is not None else None
     if state.get("complete"):
         upgraded["end"] = keep_through
@@ -873,8 +883,10 @@ def _upgrade_v1(
     return upgraded
 
 
-def _trim_after(out_path: Path, fmt: str, keep_through: str) -> None:
+def _trim_after(out_path: Path, fmt: str, keep_through: str) -> int:
     """Remove every row dated after `keep_through`, leaving the rest byte for byte.
+
+    Returns how many dated rows were kept.
 
     Streamed into a file beside the original and swapped in with one rename, so
     an interruption leaves either the old file or the new one, never half of
@@ -886,12 +898,14 @@ def _trim_after(out_path: Path, fmt: str, keep_through: str) -> None:
     """
     scratch = out_path.with_name(out_path.name + ".trimming")
     with out_path.open(encoding="utf-8", newline="") as src:
-        _copy_rows_through(src, scratch, fmt, keep_through)
+        kept = _copy_rows_through(src, scratch, fmt, keep_through)
     os.replace(scratch, out_path)
+    return kept
 
 
-def _copy_rows_through(src: TextIO, scratch: Path, fmt: str, keep_through: str) -> None:
+def _copy_rows_through(src: TextIO, scratch: Path, fmt: str, keep_through: str) -> int:
     """The body of `_trim_after`: copy every row dated on or before `keep_through`."""
+    kept = 0
     with scratch.open("w", encoding="utf-8", newline="") as dst:
         if fmt == "csv":
             reader = csv.reader(src)
@@ -902,8 +916,10 @@ def _copy_rows_through(src: TextIO, scratch: Path, fmt: str, keep_through: str) 
                 # No `date` column: not a file this can read, so it is copied whole.
                 column = names.index("date") if "date" in names else -1
                 for record in reader:
-                    if 0 <= column < len(record) and record[column] > keep_through:
-                        continue
+                    if 0 <= column < len(record):
+                        if record[column] > keep_through:
+                            continue
+                        kept += 1
                     dst.write(",".join(_csv_cell(cell) for cell in record) + "\n")
         else:
             for line in src:
@@ -911,9 +927,12 @@ def _copy_rows_through(src: TextIO, scratch: Path, fmt: str, keep_through: str) 
                     day = json.loads(line).get("date")
                 except (ValueError, AttributeError):
                     day = None
-                if isinstance(day, str) and day > keep_through:
-                    continue
+                if isinstance(day, str):
+                    if day > keep_through:
+                        continue
+                    kept += 1
                 dst.write(line)
+    return kept
 
 
 class _Job(NamedTuple):
@@ -925,6 +944,8 @@ class _Job(NamedTuple):
     end: Day
     has_rows: bool
     ident: _RowIdentity
+    #: True when the file is being CONTINUED, so its next day is fixed.
+    resumed: bool = False
 
 
 class _Progress:
@@ -943,6 +964,8 @@ class _Progress:
         self.last_day: date | None = None
         self.resume_from: str | None = None
         self.skipped = False
+        #: The key cannot read the day a continued file carries on from.
+        self.out_of_reach = False
         #: The day this run's request started on, which is where a rerun has to
         #: carry on if the run fails before its first page is finished.
         self.first_day: str | None = None
@@ -1015,6 +1038,25 @@ def _stream(job: _Job, start: Day, progress: _Progress) -> None:
             # boundary, and restarting would duplicate rows.
             if floor is None or progress.written:
                 raise
+            # A FILE BEING CONTINUED CANNOT JUMP FORWARD. Starting at the key's
+            # first day instead of the day the file continues from leaves a gap
+            # the state file cannot describe, so the file would claim days it
+            # does not hold. It happens when a cron has not run for longer than
+            # the key's window, or the key lost its plan. Refused, file untouched.
+            if job.resumed:
+                if start is None or floor <= str(start):
+                    raise
+                print(
+                    f"  this key reaches back to {floor}, but {job.out_path.name} "
+                    f"continues from {start}: the days between are out of reach, and "
+                    f"carrying on from {floor} would leave a gap in the file. The rows "
+                    f"already downloaded are left alone.\n"
+                    f"    --overwrite   start the file again from what this key can read\n"
+                    f"    or pass a different --out and run again",
+                    file=sys.stderr,
+                )
+                progress.out_of_reach = True
+                return
             print(
                 f"  this key reaches back to {floor}, not {start} — starting there",
                 file=sys.stderr,
@@ -1059,7 +1101,13 @@ def _nothing_written(
     On a first run both files go: an empty file reads as "this park has no
     history". On a RESUMED run an earlier run's rows are real and are not ours to
     remove, so the state is kept and the exit code says the run did not finish.
+
+    A continued file the key can no longer reach the next day of is refused
+    outright: nothing written and the state untouched, so the next run meets the
+    same refusal until someone decides, rather than carrying on with a gap.
     """
+    if progress.out_of_reach:
+        return 1
     if resumed:
         _record(sf, progress.last_day, progress.resume_point(), complete=False)
         return 1
@@ -1154,7 +1202,7 @@ def backfill_park(  # noqa: PLR0913 - window is keyword-only, added without brea
         return _window_closed(out_path, end, start, resumed=resumed_run)
 
     ident = _RowIdentity(park)
-    job = _Job(history, out_path, fmt, end, has_rows, ident)
+    job = _Job(history, out_path, fmt, end, has_rows, ident, resumed=resumed_run)
     progress = _Progress()
     try:
         _stream(job, start, progress)
@@ -1194,7 +1242,7 @@ def backfill_park(  # noqa: PLR0913 - window is keyword-only, added without brea
             out_path.unlink(missing_ok=True)
         raise
 
-    if progress.skipped and progress.written == 0:
+    if progress.out_of_reach or (progress.skipped and progress.written == 0):
         return _nothing_written(out_path, state_path, sf, progress, resumed=resumed_run)
 
     # Completion is RECORDED, never inferred from a missing file. That is the
@@ -1460,7 +1508,13 @@ the file only ever grows and no row in it changes later.
 --since applies when a file is started. A later run continues that file forward
 and accepts the same --since, or a later one. One earlier than the file's first
 day, or past the day it continues from, is refused: use --overwrite, or a
-different --out.
+different --out. A --since before your plan's window starts the file at the
+first day your key can read, and the same --since keeps working on every later
+run.
+
+a file is never continued past a gap. If the day it continues from is older than
+your key can read (a cron that missed more days than your window, or a plan that
+lapsed), the run is refused and the file left alone.
 
 exit codes:
   0   done

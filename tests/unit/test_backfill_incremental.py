@@ -648,6 +648,105 @@ class TestA40FileIsCorrectedNotFrozen:
         assert "js SDK" in capsys.readouterr().err
 
 
+class TestTheKeysWindowAndAFileBeingContinued:
+    """A key's window moves forward every day; a file being continued does not."""
+
+    def test_a_fixed_since_before_the_window_works_every_night(self, tmp_path: Path) -> None:
+        # `--since 2025-01-01` in a cron, on a key whose window starts later: the
+        # first run starts at the key's first day, and the same line must keep
+        # succeeding on every later night.
+        archive = _Archive(archive_from="2025-06-01", floor="2026-08-01")
+        rng = _Range(since="2026-01-01")
+        for _ in range(3):
+            assert _run(archive, tmp_path, window=rng) == 0
+            archive.advance(1)
+            archive.floor = (_day(archive.floor) + timedelta(days=1)).isoformat()
+        rows = _rows(tmp_path)
+        assert min(r["date"] for r in rows) == "2026-08-01"
+        assert max(r["date"] for r in rows) == "2026-09-28"
+        _assert_every_row_final_and_unique(rows)
+
+    def test_a_continued_file_never_jumps_to_the_keys_first_day(
+        self, tmp_path: Path, capsys
+    ) -> None:
+        # The cron missed more nights than the key's window holds. Carrying on
+        # from the key's first day would leave days missing from the middle of
+        # the file while its state claimed them. Refused, and nothing touched.
+        archive = _Archive(archive_from="2026-09-01")
+        _run(archive, tmp_path)
+        before = (tmp_path / "p.ndjson").read_bytes()
+        state_before = _state(tmp_path)
+        archive.advance(20)
+        archive.floor = "2026-10-05"
+        capsys.readouterr()
+
+        assert _run(archive, tmp_path) == 1
+        assert archive.calls[-1][0] == "2026-09-27", "asked for anything but its own next day"
+        assert (tmp_path / "p.ndjson").read_bytes() == before
+        assert _state(tmp_path) == state_before
+        err = capsys.readouterr().err
+        assert "reaches back to 2026-10-05" in err
+        assert "continues from 2026-09-27" in err
+        assert "gap" in err and "--overwrite" in err
+        # And it stays refused until someone decides, rather than carrying on.
+        assert _run(archive, tmp_path) == 1
+
+    def test_an_interrupted_run_is_not_resumed_past_a_gap_either(self, tmp_path: Path) -> None:
+        archive = _Archive(archive_from="2026-06-01")
+        (tmp_path / "p.ndjson").write_text('{"date": "2026-06-01"}\n', encoding="utf-8")
+        state = backfill.state_path_for(tmp_path, "p", "ndjson")
+        state.write_text(
+            json.dumps(
+                {
+                    "sdk": "py",
+                    "sdkVersion": PACKAGE_VERSION,
+                    "stateVersion": backfill.STATE_VERSION,
+                    "format": "ndjson",
+                    "columns": "",
+                    "start": "2026-06-01",
+                    "end": "2026-09-26",
+                    "lastDay": "2026-06-30",
+                    "resumeFrom": "2026-07-01",
+                    "complete": False,
+                }
+            ),
+            encoding="utf-8",
+        )
+        archive.floor = "2026-08-01"
+        assert _run(archive, tmp_path) == 1
+        assert (tmp_path / "p.ndjson").read_text(encoding="utf-8") == '{"date": "2026-06-01"}\n'
+
+    def test_a_4_0_file_wholly_inside_the_refetch_window_is_downloaded_again(
+        self, tmp_path: Path
+    ) -> None:
+        # Every anonymous 4.0 file: seven days, all within the cut. Trimmed, it
+        # would be empty with a state continuing from a day the key can no longer
+        # read. It is started again instead.
+        archive = _Archive(archive_from="2021-07-03", floor="2026-09-22")
+        _write_4_0_window(tmp_path, archive, "2026-09-22")
+        _v1_state(tmp_path, "ndjson", start="2021-07-03")
+        archive.floor = "2026-09-23"  # a day later, the window has moved on
+        assert _run(archive, tmp_path) == 0
+        rows = _rows(tmp_path)
+        assert min(r["date"] for r in rows) == "2026-09-23"
+        assert max(r["date"] for r in rows) == "2026-09-26"
+        _assert_every_row_final_and_unique(rows)
+        assert _state(tmp_path)["stateVersion"] == backfill.STATE_VERSION
+
+
+def _write_4_0_window(tmp_path: Path, archive: _Archive, first: str) -> None:
+    """A 4.0 file that holds only `first` .. `through`, as an anonymous run wrote it."""
+    path = tmp_path / "p.ndjson"
+    ident = backfill._RowIdentity(_Park("p", "Park"))
+    floor, archive.floor = archive.floor, None
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = backfill.Writer(handle, "ndjson", True, ident)
+        for ref, row in archive.days_with_entities(first, archive.through):
+            writer.write(ref, row)
+    archive.floor = floor
+    archive.calls.clear()
+
+
 class TestAFinishedFileWrittenToAnotherContractIsRefused:
     def test_a_complete_state_with_another_column_layout_is_not_appended_to(
         self, tmp_path: Path, capsys
