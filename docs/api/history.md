@@ -15,6 +15,18 @@ hundred times fewer calls than the same data fetched ride by ride.
     options:
       heading_level: 2
 
+::: themeparks.HistoryChanges
+    options:
+      heading_level: 2
+
+::: themeparks.AsyncHistoryChanges
+    options:
+      heading_level: 2
+
+::: themeparks.HistorySpan
+    options:
+      heading_level: 2
+
 ::: themeparks.BudgetExhaustedError
     options:
       heading_level: 2

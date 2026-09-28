@@ -11,7 +11,7 @@ from datetime import date as _d
 import httpx
 import pytest
 
-from themeparks import BudgetExhaustedError, RetryConfig, ThemeParks
+from themeparks import BudgetExhaustedError, HistorySpan, RetryConfig, ThemeParks
 from themeparks._errors import RateLimitError
 
 
@@ -380,6 +380,25 @@ class TestSpan:
         # returned the wrong one could not pass.
         span = self._span_for(PARK_COVERAGE)
         assert span.retrievable_through < span.recorded_to
+
+    def test_final_through_is_the_earlier_of_filed_and_retrievable(self):
+        # Days after `recorded_to` are served but can still change, and days
+        # after `retrievable_through` are not this key's to ask for. The final
+        # boundary has to respect both, so each fixture keeps them apart in the
+        # opposite direction.
+        span = self._span_for(PARK_COVERAGE)
+        assert span.final_through == span.retrievable_through == _d(2026, 8, 23)
+        live = span._replace(recorded_to=_d(2026, 9, 26), retrievable_through=_d(2026, 9, 28))
+        assert live.final_through == _d(2026, 9, 26)
+
+    def test_final_through_is_unknown_when_nothing_is_filed(self):
+        assert HistorySpan(None, None, _d(2026, 9, 28)).final_through is None
+        assert HistorySpan(None, _d(2026, 9, 26), None).final_through is None
+
+    def test_final_through_does_not_change_the_tuple(self):
+        # A property, not a fourth field: `a, b, c = span` is public usage.
+        archive_from, recorded_to, retrievable_through = self._span_for(PARK_COVERAGE)
+        assert len(self._span_for(PARK_COVERAGE)) == 3
 
     def test_span_feeds_days_directly(self):
         calls = []
