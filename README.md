@@ -317,9 +317,13 @@ Installing the library installs `themeparks-backfill`, which does all of the
 above and stops before the walls:
 
 ```bash
+# How far back it reaches is your plan, so set the key first: without one you get
+# the 7 days anonymous access allows, and the run still succeeds, quietly.
+export THEMEPARKS_API_KEY=tpw_your_key
+
 themeparks-backfill "Disneyland Park"           # a park, by name or id
 themeparks-backfill "Walt Disney World Resort"  # a destination: every park in it
-themeparks-backfill --list disney               # find an id. Needs no key.
+themeparks-backfill --list disney               # find an id. This part needs no key.
 ```
 
 It reads how far back your own key may ask and starts there, writes NDJSON or
