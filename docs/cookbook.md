@@ -378,8 +378,26 @@ Running the same script again picks up from the checkpoint. Re-reading the
 last day is deliberate: a page can end mid-day, and one duplicate day is
 cheaper to de-duplicate on your side than a missing one is to notice.
 
-A complete version of this, with `--csv` output and a park list, is in
-[`examples/backfill.py`](https://github.com/ThemeParks/ThemeParks_Python/blob/main/examples/backfill.py).
+All of this is already a command, and the command handles two things the loop
+above does not:
+
+```bash
+themeparks-backfill "Disneyland Park" --format csv --out ./data
+```
+
+**Your plan's floor.** `span()` publishes the newest day you may read and
+nothing about the earliest, while `archiveFrom` is where the archive starts --
+which on any plan short of the full archive is before your window opens. So the
+range above is refused on its FIRST request unless you already know your floor.
+The command reads it out of the 403 and starts again there.
+
+**Re-running.** The loop above appends, so running it twice doubles the file.
+The command records what it wrote and declines to fetch a finished park again
+unless you pass `--overwrite`.
+
+It also takes destinations as well as parks, names every row with the park and
+the entity as the history response reported them, and has `--list` for finding
+an id without a key. See `themeparks-backfill --help`.
 
 ## Recipe 8 — Every recorded change for one day
 

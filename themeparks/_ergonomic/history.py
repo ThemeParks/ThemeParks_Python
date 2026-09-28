@@ -111,17 +111,54 @@ def _reraise_if_too_long(exc: RateLimitError, max_wait: float) -> None:
     raise exc
 
 
-def _daily_rows(envelope: DailyEnvelope) -> Iterator[tuple[str, HistoryDailyRow]]:
-    """Yield (entity id, row). A park envelope carries many entities; an entity
-    envelope carries its own rows, so both flatten to the same stream."""
+class EntityRef(NamedTuple):
+    """Who a history row belongs to, AS THE HISTORY RESPONSE REPORTS IT.
+
+    The name matters and the source of it matters more. A park's current
+    `/children` list gives today's name, which is the wrong label for a row
+    recorded years ago: rides are renamed, and stamping today's name on old data
+    quietly rewrites history. The history envelope carries its own `name` and
+    `entityType` per entity, and that is the name to use.
+    """
+
+    id: str
+    name: str
+    entity_type: str
+
+
+def _ref(entity: Any) -> EntityRef:
+    kind = getattr(entity, "entityType", None)
+    # The generated models use an enum, and str(EntityType.SHOW) is
+    # "EntityType.SHOW". `.value` is what the API sends.
+    inner = getattr(kind, "value", kind)
+    return EntityRef(
+        entity.id, getattr(entity, "name", "") or "", "" if inner is None else str(inner)
+    )
+
+
+def _daily_entity_rows(envelope: DailyEnvelope) -> Iterator[tuple[EntityRef, HistoryDailyRow]]:
+    """Yield (entity ref, row), keeping the name the response gave.
+
+    `_daily_rows` below is the same walk with the ref flattened to its id, kept
+    because `days()` has yielded `(id, row)` since 3.0 and that shape is public.
+    """
     entities = getattr(envelope, "entities", None)
     if entities is not None:
         for entity in entities:
+            ref = _ref(entity)
             for row in entity.days or []:
-                yield (entity.id, row)
+                yield (ref, row)
         return
+    ref = _ref(envelope)
     for row in getattr(envelope, "days", None) or []:
-        yield (envelope.id, row)
+        yield (ref, row)
+
+
+def _daily_rows(envelope: DailyEnvelope) -> Iterator[tuple[str, HistoryDailyRow]]:
+    """Yield (entity id, row). A park envelope carries many entities; an entity
+    envelope carries its own rows, so both flatten to the same stream."""
+    for ref, row in _daily_entity_rows(envelope):
+        yield (ref.id, row)
 
 
 def _raw_rows(envelope: RawEnvelope) -> Iterator[tuple[str, HistoryRow]]:
@@ -154,6 +191,29 @@ class HistoryApi:
         """
         return _span(self.coverage())
 
+    def days_with_entities(
+        self,
+        start: str | _date | None = None,
+        end: str | _date | None = None,
+        *,
+        max_wait: float = DEFAULT_MAX_WAIT_SECONDS,
+    ) -> Iterator[tuple[EntityRef, HistoryDailyRow]]:
+        """`days()`, but each row arrives with the entity's name and type.
+
+        Use this when you are writing history to a file. The name comes from the
+        history response itself, so it is the label that response gives for those
+        rows rather than the park's current `/children` list -- rides get renamed,
+        and today's name on a row from three years ago is a quiet rewrite of the
+        record.
+
+        It also saves a request: the name is already in the payload, so nothing
+        needs to ask what an id refers to.
+        """
+        envelope: DailyEnvelope | None = self._first_daily(start, end, max_wait)
+        while envelope is not None:
+            yield from _daily_entity_rows(envelope)
+            envelope = self._next_daily(envelope, max_wait)
+
     def days(
         self,
         start: str | _date | None = None,
@@ -165,6 +225,9 @@ class HistoryApi:
 
         Pages automatically. Given a park id this uses the park call, which
         answers every entity in the park in one request.
+
+        `days_with_entities()` is the same stream with the entity's name and type
+        attached; this shape is kept because it is public API from 3.0.
         """
         envelope: DailyEnvelope | None = self._first_daily(start, end, max_wait)
         while envelope is not None:

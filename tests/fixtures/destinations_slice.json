@@ -1,0 +1,147 @@
+{
+  "destinations": [
+    {
+      "id": "314e42e5-95e7-448f-a127-01699a4fba04",
+      "name": "Six Flags St. Louis",
+      "slug": "sixflags_destination_SFSL",
+      "parks": [
+        {
+          "id": "815e6367-9bbe-449e-a639-a093e216188f",
+          "name": "Mid-America Parks"
+        },
+        {
+          "id": "732d5299-cc15-49c3-ab8f-937c7290d0a2",
+          "name": "Hurricane Harbor"
+        }
+      ]
+    },
+    {
+      "id": "ee2ec4b5-3bc3-403c-9e30-7fa607e6311e",
+      "name": "Cedar Point",
+      "slug": "sixflags_destination_CP",
+      "parks": [
+        {
+          "id": "c8299e1a-0098-4677-8ead-dd0da204f8dc",
+          "name": "Cedar Point"
+        },
+        {
+          "id": "5d4442cf-0db1-4406-942b-a7052e743e99",
+          "name": "Cedar Point Shores"
+        }
+      ]
+    },
+    {
+      "id": "e8d0207f-da8a-4048-bec8-117aa946b2c2",
+      "name": "Disneyland Paris",
+      "slug": "dlp",
+      "parks": [
+        {
+          "id": "ca888437-ebb4-4d50-aed2-d227f7096968",
+          "name": "Disney Adventure World"
+        },
+        {
+          "id": "dae968d5-630d-4719-8b06-3d107e944401",
+          "name": "Disneyland Park"
+        }
+      ]
+    },
+    {
+      "id": "cb785f25-3dac-48bb-9560-479aa9ebf942",
+      "name": "LEGOLAND® Korea",
+      "slug": "legolandkoreadestination",
+      "parks": [
+        {
+          "id": "9a35410b-a840-4189-abf3-fccd429f4d78",
+          "name": "LEGOLAND® Korea"
+        }
+      ]
+    },
+    {
+      "id": "bfc89fd6-314d-44b4-b89e-df1a89cf991e",
+      "name": "Disneyland Resort",
+      "slug": "disneylandresort",
+      "parks": [
+        {
+          "id": "832fcd51-ea19-4e77-85c7-75d5843b127c",
+          "name": "Disney California Adventure Park"
+        },
+        {
+          "id": "7340550b-c14d-4def-80bb-acdb51d49a66",
+          "name": "Disneyland Park"
+        }
+      ]
+    },
+    {
+      "id": "e957da41-3552-4cf6-b636-5babc5cbc4e5",
+      "name": "Walt Disney World® Resort",
+      "slug": "waltdisneyworldresort",
+      "parks": [
+        {
+          "id": "75ea578a-adc8-4116-a54d-dccb60765ef9",
+          "name": "Magic Kingdom Park"
+        },
+        {
+          "id": "288747d1-8b4f-4a64-867e-ea7c9b27bad8",
+          "name": "Disney's Hollywood Studios"
+        },
+        {
+          "id": "1c84a229-8862-4648-9c71-378ddd2c7693",
+          "name": "Disney's Animal Kingdom Theme Park"
+        },
+        {
+          "id": "b070cbc5-feaa-4b87-a8c1-f94cca037a18",
+          "name": "Disney's Typhoon Lagoon Water Park"
+        },
+        {
+          "id": "47f90d2c-e191-4239-a466-5892ef59a88b",
+          "name": "EPCOT"
+        },
+        {
+          "id": "ead53ea5-22e5-4095-9a83-8c29300d7c63",
+          "name": "Disney's Blizzard Beach Water Park"
+        }
+      ]
+    },
+    {
+      "id": "f9497403-adf3-4409-bd79-bb5b54000e45",
+      "name": "Walibi Rhône-Alpes",
+      "slug": "walibirhonealpes",
+      "parks": [
+        {
+          "id": "28aee1df-1d05-4f53-bbf5-08f7aabff3a1",
+          "name": "Walibi Rhône-Alpes"
+        }
+      ]
+    },
+    {
+      "id": "b1444147-b93a-4f73-b12d-28f9b1f7ec7c",
+      "name": "Knott's Berry Farm",
+      "slug": "sixflags_destination_KB",
+      "parks": [
+        {
+          "id": "0a6123bb-1e8c-4b18-a2d3-2696cf2451f5",
+          "name": "Knott's Berry Farm"
+        },
+        {
+          "id": "153c584b-6957-4b26-9965-f2aaa10ab558",
+          "name": "Knott’s Soak City"
+        }
+      ]
+    },
+    {
+      "id": "96fc6528-d143-4c6c-a2ac-01e3c1192d21",
+      "name": "Six Flags Great America",
+      "slug": "sixflags_destination_SFGR",
+      "parks": [
+        {
+          "id": "15805a4d-4023-4702-b9f2-3d3cab2e0c1e",
+          "name": "Six Flags Great America"
+        },
+        {
+          "id": "044296af-10af-4868-a1f0-8fb2b7478d96",
+          "name": "Hurricane Harbor Chicago"
+        }
+      ]
+    }
+  ]
+}

@@ -311,9 +311,25 @@ except BudgetExhaustedError as exc:
     print(f"resume in {exc.retry_after:.0f}s")
 ```
 
-A complete backfill script with resume and CSV output is in
-[`examples/backfill.py`](examples/backfill.py); it pulls Disneyland Resort's
-whole daily archive, 98,452 rows, in one run.
+### Or skip the code: there is a command
+
+Installing the library installs `themeparks-backfill`, which does all of the
+above and stops before the walls:
+
+```bash
+themeparks-backfill "Disneyland Park"           # a park, by name or id
+themeparks-backfill "Walt Disney World Resort"  # a destination: every park in it
+themeparks-backfill --list disney               # find an id. Needs no key.
+```
+
+It reads how far back your own key may ask and starts there, writes NDJSON or
+`--format csv`, names every row with the park and the entity, records what it
+has done so re-running never duplicates a file, and exits 75 when the hourly
+history budget runs out so a scheduler retries rather than alerts.
+
+`python -m themeparks.backfill` is the same thing, which is the one to use if
+`pip install --user` put the script somewhere off your PATH. `themeparks-backfill
+--help` has the rest.
 
 ## Low-level escape hatch
 

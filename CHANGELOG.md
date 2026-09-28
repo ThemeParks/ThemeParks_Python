@@ -1,5 +1,51 @@
 # Changelog
 
+## [3.3.0] - 2026-09-28
+
+### Added
+
+- **`themeparks-backfill`: the archive download as a command.** It was an example
+  to copy off GitHub. The first paying customer followed that link and had to
+  work out that the library needed installing, then what the arguments were,
+  then read a traceback. Now:
+
+  ```bash
+  pip install themeparks
+  themeparks-backfill "Disneyland Park"
+  ```
+
+  - Takes a park or a **destination**, by name or id. A destination back fills
+    every park in it, one file each. `"Walt Disney World Resort"` is the handle
+    people actually have; four park uuids is not.
+  - `--list [text]` prints destinations with their parks underneath, and **needs
+    no key**, so you can find your park before deciding whether to pay.
+  - Refuses to guess between two matches. Two parks are named exactly
+    "Disneyland Park" (Anaheim and Paris), so the candidate list names the
+    destination as well.
+  - **Runs without a key**, reading the 7 days anonymous access allows, and says
+    what a key would add. It used to refuse to start with a message that
+    mentioned anonymous access in the same breath.
+  - NDJSON by default, `--format csv` for one wide row per entity per day.
+  - Checkpoints against the hourly history budget and exits 75 (`EX_TEMPFAIL`),
+    so a cron or timer retries rather than alerting. Re-running continues.
+
+  `python -m themeparks.backfill` is the same thing. `examples/backfill.py`
+  remains as a shim so existing links keep working.
+
+### Fixed
+
+- **The history window recovery now actually works.** 3.2.0's `examples/backfill.py`
+  read `earliestAllowedDate` from the top level of the 403 body; the API nests it
+  under `error`. So the recovery shipped doing nothing and a Pro customer still
+  got a traceback on their first request. The tests passed because the fixture was
+  built from the formatted text in a traceback rather than a real response, so the
+  code and the test were wrong together. The fixture is now captured from
+  production and a test fails if anyone flattens it.
+
+  The underlying gap is in the API, not the client: `/history/coverage` reports
+  where the archive starts and where your window ends, and nothing about where
+  your window begins. Until it does, the 403 is the only place that date exists.
+
 ## [3.2.0] - 2026-09-26
 
 ### Added
