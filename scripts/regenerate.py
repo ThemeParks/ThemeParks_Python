@@ -232,7 +232,12 @@ def main() -> None:
     # `format` alone does not sort imports. Without this, `ruff check` in CI fails
     # on a file nobody is allowed to edit by hand.
     subprocess.run(
-        [sys.executable, "-m", "ruff", "check", "--fix", "--quiet", str(OUTPUT)],
+        # --select I ONLY. Unpinned, this is one `pyproject.toml` edit away from
+        # deleting imports: the F401 per-file-ignore for `_generated/*` is the only
+        # reason a stray `import os` survives it today, and this step runs with
+        # check=False inside the nightly drift job, so a tightened ignore would
+        # start removing code silently.
+        [sys.executable, "-m", "ruff", "check", "--select", "I", "--fix", "--quiet", str(OUTPUT)],
         check=False,
     )
     subprocess.run(
