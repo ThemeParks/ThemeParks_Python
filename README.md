@@ -366,12 +366,19 @@ in the file is one that will not change later.
 `--since` applies when a file is started. Later runs continue that file and
 accept the same `--since`, or a later one, such as a cron line computing "30
 days ago". One earlier than the file's first day, or one that would leave a gap,
-is refused rather than ignored: pass `--overwrite`, or a different `--out`.
+is refused rather than ignored: pass `--overwrite`, or a different `--out`. A
+fixed `--since` older than your key's window starts the file at the first day
+your key can read, and the same command line keeps working every night.
+
+A file is never continued past a gap. If the day it would continue from is
+older than your key can read, because a cron missed more days than your window
+or a plan lapsed, the run is refused with exit 1 and the file is left alone.
 
 Files written by 4.0.x ended on today, so their newest rows can be partial. The
 first run of this version removes the rows from the last week of such a file and
 fetches those days again, final this time. Everything else in the file is left
-exactly as it was.
+exactly as it was. A 4.0 file that lies wholly inside that week, as every
+anonymous 7-day file does, is simply downloaded again.
 
 `python -m themeparks.backfill` is the same thing, which is the one to use if
 `pip install --user` put the script somewhere off your PATH. `themeparks-backfill

@@ -52,9 +52,18 @@
   which of their newest days were final, so the first run of this version
   removes the rows from the last seven days before that run's end and fetches
   those days again. Every other row is left byte for byte as it was. A 4.0 file
-  whose newest row is older than that is not rewritten at all. The state file
-  format moves to version 2 for this; version 1 files from this SDK are upgraded,
-  not refused.
+  whose newest row is older than that is not rewritten at all, and one that lies
+  wholly inside those seven days, as every anonymous 7-day file does, is simply
+  downloaded again. The state file format moves to version 2 for this; version 1
+  files from this SDK are upgraded, not refused.
+
+- **A continued file could skip ahead to the key's first day.** When the day a
+  file continues from is older than the key may read, because a cron missed more
+  days than the window or a plan lapsed, the run carried on from the key's first
+  day and left a gap the state file did not record. It is refused now with exit
+  1, the file and its state untouched, and a message naming `--overwrite`. A
+  fixed `--since` older than the window is not affected: the file starts at the
+  key's first day, and the same command line keeps working every night.
 
 - **A finished file written to a different column layout was appended to.** Only
   an unfinished one was refused. A finished one fell through to a fresh start,
