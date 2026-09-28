@@ -136,7 +136,12 @@ def apply_nullable_patches(text: str) -> str:
         # result was a model that cannot parse the last page of any paged
         # response, where `next` is null.
         pattern = re.compile(
-            rf"(?P<head>class {class_name}\(BaseModel\):\n"
+            # The base class is `ApiModel`, ours, not `BaseModel` -- see
+            # themeparks/_models_base.py for why. Both are accepted so the patch
+            # does not silently stop matching if that changes again; the
+            # invariant check below is what turns a miss into a hard stop, and it
+            # did exactly that when the base class moved.
+            rf"(?P<head>class {class_name}\((?:BaseModel|ApiModel)\):\n"
             rf"(?:(?:    [^\n]*)?\n)*?"
             rf"    {field_name}:\s*)"
             rf"(?P<line>[^\n]+)"
@@ -182,6 +187,12 @@ def main() -> None:
         str(OUTPUT),
         "--output-model-type",
         "pydantic_v2.BaseModel",
+        # EVERY MODEL KEEPS WHAT THE SPEC DOES NOT DECLARE. Pydantic's default is
+        # to drop it, and this spec trails the API by days at a time, so during
+        # that window new fields were being deleted at parse time for every
+        # caller -- silently, with nothing failing. See themeparks/_models_base.py.
+        "--base-class",
+        "themeparks._models_base.ApiModel",
         "--use-schema-description",
         "--use-field-description",
         "--use-annotated",
@@ -216,6 +227,14 @@ def main() -> None:
     # Auto-format the generated file so `ruff format --check` in CI doesn't
     # fail on quote-style or whitespace differences from datamodel-codegen.
     print("Formatting generated models with ruff...")
+    # `check --fix` first, for the import ordering: the custom base class means
+    # the generator emits a first-party import in among the third-party ones, and
+    # `format` alone does not sort imports. Without this, `ruff check` in CI fails
+    # on a file nobody is allowed to edit by hand.
+    subprocess.run(
+        [sys.executable, "-m", "ruff", "check", "--fix", "--quiet", str(OUTPUT)],
+        check=False,
+    )
     subprocess.run(
         [sys.executable, "-m", "ruff", "format", str(OUTPUT)],
         check=True,

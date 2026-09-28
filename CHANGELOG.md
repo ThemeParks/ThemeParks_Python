@@ -38,7 +38,11 @@ grows as the day elapses.
 - **Vendored models were stale, and pydantic drops what it does not declare.** So
   `unknownMinutes`, `inParkHours` and `extremeWaits` were being deleted at parse
   time -- not just from the CSV, from every Python caller of `days()`. Models
-  regenerated from the live spec.
+  regenerated from the live spec, and **every model now keeps fields the schema
+  does not declare** (`themeparks._models_base.ApiModel`, `extra="allow"`), so a
+  field the API adds tomorrow reaches you before this SDK knows it exists rather
+  than being silently discarded until the next regeneration. Reading it in typed
+  code still wants a regeneration; losing it does not have to be the default.
 
 - **UTC timestamps are written `Z`, not `+00:00`.** Same instant, different
   string; `Z` is what the API sends. This alone made 39,201 lines of an EPCOT

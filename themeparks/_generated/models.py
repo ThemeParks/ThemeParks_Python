@@ -7,7 +7,9 @@ from datetime import date as date_aliased
 from enum import Enum, IntEnum
 from typing import Annotated
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, ConfigDict, Field
+
+from themeparks._models_base import ApiModel
 
 
 class Success(Enum):
@@ -30,7 +32,7 @@ class Code(IntEnum):
     integer_401 = 401
 
 
-class Error(BaseModel):
+class Error(ApiModel):
     type: Type
     message: str
     """
@@ -42,7 +44,7 @@ class Error(BaseModel):
     """
 
 
-class AuthenticationRequired(BaseModel):
+class AuthenticationRequired(ApiModel):
     """
     401: this endpoint needs an API key (X-API-Key header) or a session token, and none was sent or the one sent was not accepted. A revoked, mistyped or truncated key answers this too.
     """
@@ -64,7 +66,7 @@ class BoardingGroupState(Enum):
     CLOSED = "CLOSED"
 
 
-class DiningAvailability(BaseModel):
+class DiningAvailability(ApiModel):
     partySize: float | None = None
     """
     Available party size
@@ -101,7 +103,7 @@ class Code1(IntEnum):
     integer_400 = 400
 
 
-class Error1(BaseModel):
+class Error1(ApiModel):
     type: Type1
     message: str
     """
@@ -113,7 +115,7 @@ class Error1(BaseModel):
     """
 
 
-class EntityInvalidParameter(BaseModel):
+class EntityInvalidParameter(ApiModel):
     """
     400: a path parameter is the wrong shape, such as a one-digit `month` or a `year` outside the accepted range. An unknown id returns 404 first.
     """
@@ -125,7 +127,7 @@ class EntityInvalidParameter(BaseModel):
     error: Error1
 
 
-class EntityLocation(BaseModel):
+class EntityLocation(ApiModel):
     latitude: float | None = None
     """
     Latitude coordinate of the entity location
@@ -148,7 +150,7 @@ class Code2(IntEnum):
     integer_404 = 404
 
 
-class Error2(BaseModel):
+class Error2(ApiModel):
     type: Type2
     message: str
     """
@@ -160,7 +162,7 @@ class Error2(BaseModel):
     """
 
 
-class EntityNotFound(BaseModel):
+class EntityNotFound(ApiModel):
     """
     404: nothing matches `id` (a UUID, a slug, or a destination's externalId; a malformed id is 404 too). The answer is the same whether it never existed or was removed.
     """
@@ -185,14 +187,14 @@ class EntityType(Enum):
     SHOW = "SHOW"
 
 
-class HistoryCoverage(BaseModel):
+class HistoryCoverage(ApiModel):
     firstRecordedAt: date_aliased | None = None
     """
     First park-local day we hold anything for this entity, or null. Per-field detail: GET /v1/entity/{id}/history/coverage.
     """
 
 
-class HistoryCoverageKindSpan(BaseModel):
+class HistoryCoverageKindSpan(ApiModel):
     """
     One live-data field's recorded span for an entity, both ends inclusive.
     """
@@ -207,7 +209,7 @@ class HistoryCoverageKindSpan(BaseModel):
     """
 
 
-class HistoryDailyExtremeWaits(BaseModel):
+class HistoryDailyExtremeWaits(ApiModel):
     """
     How many wait readings of 480 minutes or more the day's statistics include. Such readings are usually feed errors (values like 999); they are counted here as a flag and stay in every statistic. Counted per reading while OPERATING. Present only when there were some, and then with both counts.
     """
@@ -222,7 +224,7 @@ class HistoryDailyExtremeWaits(BaseModel):
     """
 
 
-class HistoryDailyStats(BaseModel):
+class HistoryDailyStats(ApiModel):
     """
     Wait statistics for the day. p50, mean and p90 are weighted by how many minutes each wait was showing; min and max are the extremes of every value posted. Only minutes where the entity was OPERATING (not unknown) and the wait was valid count. A wait is valid during the run and on the day it was posted; the wait showing when a ride opens counts from the opening if it last changed within 24 hours; a wait carried over midnight does not count until it changes. Nothing the park reported is excluded: a reading of 480 minutes or more stays in these statistics and is counted in the row's `extremeWaits`. Absent when no minute counted.
     """
@@ -253,12 +255,12 @@ class Type3(Enum):
     HISTORY_BACKEND_UNAVAILABLE = "HISTORY_BACKEND_UNAVAILABLE"
 
 
-class Error3(BaseModel):
+class Error3(ApiModel):
     type: Type3
     message: str
 
 
-class HistoryErrorBackendUnavailable(BaseModel):
+class HistoryErrorBackendUnavailable(ApiModel):
     """
     502: history is temporarily unavailable. Retry shortly.
     """
@@ -270,7 +272,7 @@ class Type4(Enum):
     INVALID_DATE = "INVALID_DATE"
 
 
-class Error4(BaseModel):
+class Error4(ApiModel):
     type: Type4
     message: str
     """
@@ -278,7 +280,7 @@ class Error4(BaseModel):
     """
 
 
-class HistoryErrorInvalidDate(BaseModel):
+class HistoryErrorInvalidDate(ApiModel):
     """
     400: a date parameter is not a calendar day or an RFC 3339 instant with an explicit offset, or date was combined with from/to, or from and to mix the two forms, or to was given without from.
     """
@@ -290,7 +292,7 @@ class Type5(Enum):
     INVALID_RANGE = "INVALID_RANGE"
 
 
-class Error5(BaseModel):
+class Error5(ApiModel):
     type: Type5
     message: str
     """
@@ -298,7 +300,7 @@ class Error5(BaseModel):
     """
 
 
-class HistoryErrorInvalidRange(BaseModel):
+class HistoryErrorInvalidRange(ApiModel):
     """
     400: both ends parsed, but the range runs backwards (days: to before from; instants: to not after from).
     """
@@ -310,12 +312,12 @@ class Type6(Enum):
     NOT_FOUND = "NOT_FOUND"
 
 
-class Error6(BaseModel):
+class Error6(ApiModel):
     type: Type6
     message: str
 
 
-class HistoryErrorNotFound(BaseModel):
+class HistoryErrorNotFound(ApiModel):
     """
     404: no entity with that id.
     """
@@ -327,7 +329,7 @@ class Type7(Enum):
     RANGE_TOO_LONG = "RANGE_TOO_LONG"
 
 
-class Error7(BaseModel):
+class Error7(ApiModel):
     type: Type7
     message: str
     """
@@ -335,7 +337,7 @@ class Error7(BaseModel):
     """
 
 
-class HistoryErrorRangeTooLong(BaseModel):
+class HistoryErrorRangeTooLong(ApiModel):
     """
     400: the range is too long. The limit is not the same on every path: 31 days on /history (1 for a park), and 3660 on /history/daily (a park pages at 31 instead). Split the range into shorter calls.
     """
@@ -347,7 +349,7 @@ class Type8(Enum):
     HISTORY_RATE_LIMITED = "HISTORY_RATE_LIMITED"
 
 
-class Error8(BaseModel):
+class Error8(ApiModel):
     type: Type8
     message: str
     """
@@ -359,7 +361,7 @@ class Error8(BaseModel):
     """
 
 
-class HistoryErrorRateLimited(BaseModel):
+class HistoryErrorRateLimited(ApiModel):
     """
     429: your hourly history budget is spent. It is separate from the per-minute limit; the limits per plan are on the pricing page.
     """
@@ -371,7 +373,7 @@ class Type9(Enum):
     HISTORY_WINDOW_EXCEEDED = "HISTORY_WINDOW_EXCEEDED"
 
 
-class Error9(BaseModel):
+class Error9(ApiModel):
     type: Type9
     message: str
     """
@@ -383,7 +385,7 @@ class Error9(BaseModel):
     """
 
 
-class HistoryErrorWindowExceeded(BaseModel):
+class HistoryErrorWindowExceeded(ApiModel):
     error: Error9
 
 
@@ -405,7 +407,7 @@ class DegradedReason(Enum):
     capacity = "capacity"
 
 
-class HistoryParkCoverageDepth(BaseModel):
+class HistoryParkCoverageDepth(ApiModel):
     """
     How far back each entity's record of this field goes, as counts per band of calendar years, measured from `summary.measuredOn`.
     """
@@ -428,7 +430,7 @@ class HistoryParkCoverageDepth(BaseModel):
     """
 
 
-class HistoryParkCoverageEntity(BaseModel):
+class HistoryParkCoverageEntity(ApiModel):
     """
     One entity we hold history for. Entities with none (often parades, shows and lands) are absent.
     """
@@ -454,7 +456,7 @@ class HistoryParkCoverageEntity(BaseModel):
     """
 
 
-class HistoryParkCoverageField(BaseModel):
+class HistoryParkCoverageField(ApiModel):
     """
     One field across the park. `entities` counts the entities we hold it for; entities that never reported it are not counted.
     """
@@ -474,7 +476,7 @@ class HistoryParkCoverageField(BaseModel):
     depth: HistoryParkCoverageDepth
 
 
-class HistoryParkCoverageSummary(BaseModel):
+class HistoryParkCoverageSummary(ApiModel):
     """
     Summary figures for the park, all describing what we hold.
     """
@@ -501,7 +503,7 @@ class HistoryParkCoverageSummary(BaseModel):
     """
 
 
-class HistoryRange(BaseModel):
+class HistoryRange(ApiModel):
     from_: Annotated[str, Field(alias="from")]
     """
     The start you asked for. A day comes back as you sent it; an instant comes back normalised to UTC whole seconds. On /history/daily it is always a day.
@@ -512,21 +514,21 @@ class HistoryRange(BaseModel):
     """
 
 
-class StandbyQueue(BaseModel):
+class StandbyQueue(ApiModel):
     waitTime: float | None = None
     """
     Current standby wait time in minutes
     """
 
 
-class SingleRiderQueue(BaseModel):
+class SingleRiderQueue(ApiModel):
     waitTime: float | None = None
     """
     Current single rider wait time in minutes
     """
 
 
-class BoardingGroupQueue(BaseModel):
+class BoardingGroupQueue(ApiModel):
     allocationStatus: BoardingGroupState | None = None
     currentGroupStart: float | None = None
     """
@@ -546,14 +548,14 @@ class BoardingGroupQueue(BaseModel):
     """
 
 
-class PaidStandbyQueue(BaseModel):
+class PaidStandbyQueue(ApiModel):
     waitTime: float | None = None
     """
     Current paid standby wait time in minutes
     """
 
 
-class LiveShowTime(BaseModel):
+class LiveShowTime(ApiModel):
     type: str
     """
     Type of show time entry
@@ -579,7 +581,7 @@ class LiveStatusType(Enum):
     REFURBISHMENT = "REFURBISHMENT"
 
 
-class Park(BaseModel):
+class Park(ApiModel):
     id: str
     """
     Unique identifier of the park
@@ -602,13 +604,13 @@ class Code3(IntEnum):
     integer_503 = 503
 
 
-class Error10(BaseModel):
+class Error10(ApiModel):
     type: Type10
     message: str
     code: Code3 | None = None
 
 
-class PlanUnavailable(BaseModel):
+class PlanUnavailable(ApiModel):
     """
     503: your plan could not be read just now. Try again after the Retry-After header's number of seconds.
     """
@@ -617,7 +619,7 @@ class PlanUnavailable(BaseModel):
     error: Error10
 
 
-class PriceData(BaseModel):
+class PriceData(ApiModel):
     amount: float | None = None
     """
     Numerical price amount, in the currency's lowest denomination (e.g. cents). null when the item costs money but the provider does not publish an amount; 0 means genuinely free
@@ -636,7 +638,7 @@ class Error11(Enum):
     Too_Many_Requests = "Too Many Requests"
 
 
-class RateLimited(BaseModel):
+class RateLimited(ApiModel):
     """
     429 from the request limit every call counts against. See "Limits" at the top of this document.
     """
@@ -688,7 +690,7 @@ class SchedulePriceType(Enum):
     ATTRACTION = "ATTRACTION"
 
 
-class V1MeBudget(BaseModel):
+class V1MeBudget(ApiModel):
     """
     One budget: the same figures the RateLimit-* and RateLimit-History-* headers carry.
     """
@@ -715,7 +717,7 @@ class V1MeBudget(BaseModel):
     """
 
 
-class DestinationEntry(BaseModel):
+class DestinationEntry(ApiModel):
     id: str
     """
     Unique identifier of the destination
@@ -738,14 +740,14 @@ class DestinationEntry(BaseModel):
     """
 
 
-class DestinationsResponse(BaseModel):
+class DestinationsResponse(ApiModel):
     destinations: list[DestinationEntry]
     """
     Array of all destinations
     """
 
 
-class EntityChild(BaseModel):
+class EntityChild(ApiModel):
     id: str
     """
     Unique entity identifier
@@ -770,7 +772,7 @@ class EntityChild(BaseModel):
     """
 
 
-class EntityChildrenResponse(BaseModel):
+class EntityChildrenResponse(ApiModel):
     id: str | None = None
     """
     Parent entity identifier
@@ -787,7 +789,7 @@ class EntityChildrenResponse(BaseModel):
     children: list[EntityChild] | None = None
 
 
-class EntityData(BaseModel):
+class EntityData(ApiModel):
     """
     A single entity. It may also carry attribute keys not listed here, named after the attribute, e.g. `minimumHeight` (integer, centimetres) or `mayGetWet` (boolean). Which ones appear varies by entity, so read the ones you need and do not assume any is present.
     """
@@ -835,7 +837,7 @@ class EntityData(BaseModel):
     """
 
 
-class HistoryCoverageDocument(BaseModel):
+class HistoryCoverageDocument(ApiModel):
     """
     What history we hold for one entity, per field. An entity with nothing recorded is a 200 with `kinds: {}` and null days, not 404. For a PARK the same call returns HistoryParkCoverageDocument.
     """
@@ -867,7 +869,7 @@ class HistoryCoverageDocument(BaseModel):
     """
 
 
-class HistoryDailyInParkHours(BaseModel):
+class HistoryDailyInParkHours(ApiModel):
     """
     The day's numbers limited to the park's published hours. Present only when the park published hours that day.
     """
@@ -893,7 +895,7 @@ class HistoryDailyInParkHours(BaseModel):
     extremeWaits: HistoryDailyExtremeWaits | None = None
 
 
-class HistoryDailyRow(BaseModel):
+class HistoryDailyRow(ApiModel):
     """
     One day of an entity's history. standby, singleRider, extremeWaits, showCount and inParkHours are absent when there is nothing to report; a standby block needs a valid wait showing for at least one whole minute. A row without unknownMinutes was counted under earlier rules, and also lacks extremeWaits and inParkHours.
     """
@@ -936,7 +938,7 @@ class HistoryDailyRow(BaseModel):
     """
 
 
-class HistoryParkCoverageDocument(BaseModel):
+class HistoryParkCoverageDocument(ApiModel):
     """
     What history we hold across a whole PARK, returned by /history/coverage when the entity is a PARK. Its names map to the single-entity document: `fields` is `kinds`, and each `from` and `newest` is a `first` and `last`. It reports depth and breadth; it does not find missing days.
     """
@@ -961,7 +963,7 @@ class HistoryParkCoverageDocument(BaseModel):
     """
 
 
-class HistoryParkEntityDaily(BaseModel):
+class HistoryParkEntityDaily(ApiModel):
     """
     One entity of the park, with its first recorded day and its rows. The park appears too if it has history of its own.
     """
@@ -976,7 +978,7 @@ class HistoryParkEntityDaily(BaseModel):
     """
 
 
-class ReturnTimeQueue(BaseModel):
+class ReturnTimeQueue(ApiModel):
     state: ReturnTimeState | None = None
     returnStart: AwareDatetime | None = None
     """
@@ -988,14 +990,14 @@ class ReturnTimeQueue(BaseModel):
     """
 
 
-class PaidReturnTimeQueue(BaseModel):
+class PaidReturnTimeQueue(ApiModel):
     state: ReturnTimeState | None = None
     returnStart: AwareDatetime | None = None
     returnEnd: AwareDatetime | None = None
     price: PriceData | None = None
 
 
-class LiveQueue(BaseModel):
+class LiveQueue(ApiModel):
     """
     The queues an entity has, each present only when the entity publishes it. StandbyQueue: the ordinary line. SINGLE_RIDER: a separate line for guests riding alone. RETURN_TIME: a free reservation for a later time window. PAID_RETURN_TIME: the same, paid for. BOARDING_GROUP: a virtual queue that calls groups by number. PAID_STANDBY: a paid line with its own wait.
     """
@@ -1008,7 +1010,7 @@ class LiveQueue(BaseModel):
     PAID_STANDBY: PaidStandbyQueue | None = None
 
 
-class SchedulePriceObject(BaseModel):
+class SchedulePriceObject(ApiModel):
     type: SchedulePriceType | None = None
     """
     Type of price object
@@ -1031,7 +1033,7 @@ class SchedulePriceObject(BaseModel):
     """
 
 
-class V1Me(BaseModel):
+class V1Me(ApiModel):
     """
     Your plan and what is left of it. `rateLimit` is the request limit every call counts against, this one included. `historyRateLimit` is the hourly budget the history calls count against; reading it here does not spend it. Figures are per account, so every key on one account reports the same.
     """
@@ -1056,7 +1058,7 @@ class V1Me(BaseModel):
     historyRateLimit: V1MeBudget
 
 
-class EntityLiveData(BaseModel):
+class EntityLiveData(ApiModel):
     id: str
     """
     Entity identifier
@@ -1077,7 +1079,7 @@ class EntityLiveData(BaseModel):
     diningAvailability: list[DiningAvailability] | None = None
 
 
-class EntityLiveDataResponse(BaseModel):
+class EntityLiveDataResponse(ApiModel):
     id: str | None = None
     """
     Entity identifier
@@ -1094,7 +1096,7 @@ class EntityLiveDataResponse(BaseModel):
     liveData: list[EntityLiveData] | None = None
 
 
-class HistoryDailyEnvelope(BaseModel):
+class HistoryDailyEnvelope(ApiModel):
     """
     One entity's daily summary. For a PARK the same call returns HistoryParkDailyEnvelope. range is always whole park-local days (YYYY-MM-DD), and today's row is the day so far.
     """
@@ -1120,7 +1122,7 @@ class HistoryDailyEnvelope(BaseModel):
     """
 
 
-class HistoryOpening(BaseModel):
+class HistoryOpening(ApiModel):
     """
     The `opening` object: the complete state at the start of the range, in the same shape as a row. A field is present only if the entity has it. An unknown value is its empty form (standby `{"waitTime": null}`, showtimes `[]`); an unknown status is null.
     """
@@ -1153,7 +1155,7 @@ class HistoryOpening(BaseModel):
     showtimes: list[LiveShowTime] | None = None
 
 
-class HistoryParkDailyEnvelope(BaseModel):
+class HistoryParkDailyEnvelope(ApiModel):
     """
     The daily summary of a whole PARK, returned by /history/daily when the entity's entityType is PARK. A call serves up to 31 park-local days; `range.to` is this page's last day.
     """
@@ -1178,7 +1180,7 @@ class HistoryParkDailyEnvelope(BaseModel):
     """
 
 
-class HistoryRow(BaseModel):
+class HistoryRow(ApiModel):
     """
     One row per moment any field changed. Every field is carried forward, so each row is the complete live data at that moment (same keys as GET /v1/entity/{id}/live).
     """
@@ -1196,7 +1198,7 @@ class HistoryRow(BaseModel):
     showtimes: list[LiveShowTime] | None = None
 
 
-class ScheduleEntry(BaseModel):
+class ScheduleEntry(ApiModel):
     date: str
     """
     Schedule date
@@ -1223,7 +1225,7 @@ class ScheduleEntry(BaseModel):
     """
 
 
-class HistoryEnvelope(BaseModel):
+class HistoryEnvelope(ApiModel):
     """
     One entity's history. For a PARK the same call returns HistoryParkRawEnvelope instead.
     """
@@ -1250,7 +1252,7 @@ class HistoryEnvelope(BaseModel):
     """
 
 
-class HistoryParkEntityRaw(BaseModel):
+class HistoryParkEntityRaw(ApiModel):
     """
     One entity of the park, with the same coverage, opening and history as a single-entity call. The park appears too if it has history of its own.
     """
@@ -1266,7 +1268,7 @@ class HistoryParkEntityRaw(BaseModel):
     """
 
 
-class HistoryParkRawEnvelope(BaseModel):
+class HistoryParkRawEnvelope(ApiModel):
     """
     History of a whole PARK for 1 park-local day, returned by /history when the entity's entityType is PARK. A longer range is 400 RANGE_TOO_LONG.
     """
@@ -1291,7 +1293,7 @@ class HistoryParkRawEnvelope(BaseModel):
     """
 
 
-class ParkSchedule(BaseModel):
+class ParkSchedule(ApiModel):
     id: str | None = None
     """
     Entity identifier
@@ -1311,7 +1313,7 @@ class ParkSchedule(BaseModel):
     schedule: list[ScheduleEntry] | None = None
 
 
-class EntityScheduleResponse(BaseModel):
+class EntityScheduleResponse(ApiModel):
     id: str | None = None
     """
     Entity identifier

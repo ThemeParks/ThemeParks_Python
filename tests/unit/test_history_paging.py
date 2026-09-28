@@ -16,6 +16,8 @@ from pathlib import Path
 from typing import Any
 
 from themeparks._ergonomic.history import HistoryApi, HistoryPage
+from themeparks._generated.models import HistoryDailyRow
+from themeparks._models_base import ApiModel
 from themeparks._raw import _parse_daily_history
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
@@ -120,3 +122,37 @@ class TestRowsKeepEverythingTheApiSent:
             assert (ref.name, ref.entity_type) == names[ref.id]
             seen.add(ref.entity_type)
         assert len(seen) == 3, seen
+
+
+class TestAFieldTheSchemaDoesNotKnowSurvives:
+    """The SDK must not delete data because its vendored spec is a week behind.
+
+    Pydantic's default is to drop undeclared fields. The spec trailed the API by
+    days, and in that window `unknownMinutes`, `inParkHours` and `extremeWaits`
+    were deleted at parse time for every caller of `days()` -- not untyped, gone,
+    with nothing failing and nothing warning. The models inherit
+    `themeparks._models_base.ApiModel` now, whose only job is `extra="allow"`.
+    """
+
+    def test_an_unknown_field_reaches_the_caller(self) -> None:
+        page = _page("mk_park_daily_page1.json")
+        page["next"] = None  # one page: this is about parsing, not paging
+        # A field this SDK has never heard of, in the shape a new API field arrives
+        # in: present on the row, absent from the schema.
+        for entity in page["entities"]:
+            for day in entity["days"]:
+                day["weatherClosureMinutes"] = 41
+
+        raw = _Raw([page])
+        api = HistoryApi(raw, "park")
+        rows = [row for _ref, row in api.days_with_entities("2026-08-01", "2026-08-31")]
+        assert rows, "no rows parsed"
+        # Reachable as an attribute, and in the dump the NDJSON writer uses.
+        assert rows[0].weatherClosureMinutes == 41
+        assert rows[0].model_dump(mode="json")["weatherClosureMinutes"] == 41
+
+    def test_the_base_class_is_the_reason(self) -> None:
+        # Pin the mechanism, not just the symptom: a regeneration that loses the
+        # --base-class flag would put the silent deletion straight back.
+        assert issubclass(HistoryDailyRow, ApiModel)
+        assert HistoryDailyRow.model_config.get("extra") == "allow"
