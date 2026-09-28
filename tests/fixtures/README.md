@@ -35,3 +35,16 @@ It is trimmed to keep, deliberately, every case that broke name resolution:
 
 **Do not edit these by hand.** Re-capture them. If a name upstream has drifted,
 that is a real change and the test should notice.
+
+## mk_park_daily_page1.json / mk_park_daily_page2.json
+
+Two consecutive pages of one real request, captured 2026-09-28:
+`GET /entity/75ea578a-adc8-4116-a54d-dccb60765ef9/history/daily?from=2026-08-01&to=2026-09-20`
+then its `next` followed verbatim. Trimmed to three entities (an attraction, a
+show, a restaurant); `range`, `next` and every row are the server's.
+
+They are the oracle for resumable paging. Page one covers through 2026-08-31 and
+the server says carry on at 2026-09-01, but two of its three entities have no
+rows after 2026-08-30 -- so a checkpoint taken from the newest ROW rewinds and
+re-downloads days already written. The same files are in the JavaScript SDK, so
+both ports are tested against identical bytes.

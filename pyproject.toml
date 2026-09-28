@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "themeparks"
-version = "3.3.0"
+version = "4.0.0"
 description = "Official SDK for the ThemeParks.wiki API"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -34,7 +34,7 @@ dependencies = [
 # The archive backfill, as a command rather than a file to copy off GitHub.
 # `pip install themeparks` then `themeparks-backfill "Disneyland Park"` is the
 # whole path from nothing to a file of history.
-themeparks-backfill = "themeparks.backfill:main"
+themeparks-backfill = "themeparks.backfill:cli"
 
 [project.urls]
 Homepage = "https://api.themeparks.wiki"

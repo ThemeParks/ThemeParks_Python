@@ -20,7 +20,7 @@ the cheap path here without having to know the expensive one exists.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from datetime import date as _date
 from typing import Any, NamedTuple, Union
 
@@ -111,6 +111,28 @@ def _reraise_if_too_long(exc: RateLimitError, max_wait: float) -> None:
     raise exc
 
 
+class HistoryPage(NamedTuple):
+    """One page of daily history, as the server described it.
+
+    `start` and `end` are the park-local days the page ACTUALLY covered, which is
+    not the range you asked for: a park daily call serves at most 31 days, so a
+    50-day request comes back as 31 days plus a `next`. `next_url` is the URL of
+    the following page, or None on the last one.
+
+    This exists for resumable downloads. A checkpoint taken from the ROWS is
+    wrong in both directions: the newest row's date can be earlier than the page
+    covered, because an entity that stopped reporting has no rows for the tail
+    days, so resuming there re-fetches days already written and duplicates them;
+    and a half-written page is indistinguishable from a finished one. The page
+    boundary is the server's own answer to "where do I carry on", so it is the
+    only safe checkpoint.
+    """
+
+    start: str
+    end: str
+    next_url: str | None
+
+
 class EntityRef(NamedTuple):
     """Who a history row belongs to, AS THE HISTORY RESPONSE REPORTS IT.
 
@@ -133,6 +155,17 @@ def _ref(entity: Any) -> EntityRef:
     inner = getattr(kind, "value", kind)
     return EntityRef(
         entity.id, getattr(entity, "name", "") or "", "" if inner is None else str(inner)
+    )
+
+
+def _page_of(envelope: DailyEnvelope) -> HistoryPage:
+    """The page an envelope represents, for :class:`HistoryPage`'s callers."""
+    rng = getattr(envelope, "range", None)
+    nxt = getattr(envelope, "next", None)
+    return HistoryPage(
+        getattr(rng, "from_", "") or "",
+        getattr(rng, "to", "") or "",
+        nxt or None,
     )
 
 
@@ -197,6 +230,7 @@ class HistoryApi:
         end: str | _date | None = None,
         *,
         max_wait: float = DEFAULT_MAX_WAIT_SECONDS,
+        on_page: Callable[[HistoryPage], None] | None = None,
     ) -> Iterator[tuple[EntityRef, HistoryDailyRow]]:
         """`days()`, but each row arrives with the entity's name and type.
 
@@ -208,10 +242,17 @@ class HistoryApi:
 
         It also saves a request: the name is already in the payload, so nothing
         needs to ask what an id refers to.
+
+        `on_page` is called once every row of a page has been yielded, with a
+        :class:`HistoryPage`. Checkpoint on that, never on the last row you saw.
         """
         envelope: DailyEnvelope | None = self._first_daily(start, end, max_wait)
         while envelope is not None:
             yield from _daily_entity_rows(envelope)
+            # AFTER the rows, never before: a caller checkpointing on this has to
+            # be able to trust that everything the page held is already written.
+            if on_page is not None:
+                on_page(_page_of(envelope))
             envelope = self._next_daily(envelope, max_wait)
 
     def days(
@@ -220,6 +261,7 @@ class HistoryApi:
         end: str | _date | None = None,
         *,
         max_wait: float = DEFAULT_MAX_WAIT_SECONDS,
+        on_page: Callable[[HistoryPage], None] | None = None,
     ) -> Iterator[tuple[str, HistoryDailyRow]]:
         """One summary row per park-local day, as (entity id, row).
 
@@ -232,6 +274,8 @@ class HistoryApi:
         envelope: DailyEnvelope | None = self._first_daily(start, end, max_wait)
         while envelope is not None:
             yield from _daily_rows(envelope)
+            if on_page is not None:
+                on_page(_page_of(envelope))
             envelope = self._next_daily(envelope, max_wait)
 
     def _first_daily(
@@ -300,6 +344,7 @@ class AsyncHistoryApi:
         end: str | _date | None = None,
         *,
         max_wait: float = DEFAULT_MAX_WAIT_SECONDS,
+        on_page: Callable[[HistoryPage], None] | None = None,
     ) -> AsyncIterator[tuple[str, HistoryDailyRow]]:
         try:
             envelope: DailyEnvelope | None = await self._raw.get_entity_history_daily(
@@ -311,6 +356,8 @@ class AsyncHistoryApi:
         while envelope is not None:
             for pair in _daily_rows(envelope):
                 yield pair
+            if on_page is not None:
+                on_page(_page_of(envelope))
             nxt = getattr(envelope, "next", None)
             if not nxt:
                 return

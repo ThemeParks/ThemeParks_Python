@@ -1,5 +1,138 @@
 # Changelog
 
+## [4.0.0] - 2026-09-28
+
+**3.3.0 was yanked: incomplete CSV export and a resume defect.**
+
+A major version because **the CSV header changed**: fifteen columns were added and
+the order is now the schema's, so a reader that takes columns by position gets the
+wrong ones rather than an error. Read by name. The library API is backward
+compatible.
+
+Everything here came out of porting `themeparks-backfill` to the JavaScript SDK
+and then diffing the two outputs over the same park, and out of six reviews of the
+result. Two independent implementations reading one API disagree in exactly the
+places one of them is wrong. Magic Kingdom's full archive now comes back
+**byte for byte identical** from both SDKs: 94,223 rows, 41 columns, the only
+differences being today's row, which grows as the day elapses.
+
+### Fixed
+
+- **`themeparks-backfill "magic kingdom"` wrote the wrong park name into every
+  row.** A name that matched one park by substring returned the formatted display
+  label, so `parkName` read `Magic Kingdom Park  (Walt Disney World® Resort)` for
+  all ~94,000 rows, and the resolution echo printed the destination twice. Four
+  live names reached it.
+
+- **The CSV was missing ten of the thirty-six fields the API sends, on every row.**
+  `unknownMinutes`, the whole `inParkHours` block (the day's numbers limited to the
+  park's published hours -- usually the ones you want, since a ride "down" at 2am
+  is not down), `extremeWaits` (how many readings of 480+ minutes are folded into
+  the statistics, which is how you spot a feed error), and three of `singleRider`'s
+  five percentiles while `standby` carried all five. On a five-year Magic Kingdom
+  export, 72,200 of 94,223 rows were missing their in-park statistics. **The column
+  list is now derived from the model**, so it cannot drift again.
+
+- **Vendored models were stale, and pydantic drops what it does not declare**, so
+  those three fields were deleted at parse time for every caller of `days()`, not
+  just for the CSV. Models regenerated, and every model now keeps fields the schema
+  does not declare (`themeparks._models_base.ApiModel`, `extra="allow"`), so a
+  field the API adds tomorrow survives parsing and reaches `model_dump()` and the
+  NDJSON output before this SDK knows it exists. It does not reach the CSV, whose
+  columns come from the schema.
+
+- **A resumed download duplicated a day.** The checkpoint was the newest row
+  written; the page it came from covered further, because an entity that stopped
+  reporting has no rows for the tail days. A rerun re-fetched a day already in the
+  file and appended every row of it again, breaking the `(entityId, date)` key --
+  on the exit-75 path, which is the ordinary path for a long back fill. The
+  checkpoint is now the day the server's own `next` URL starts on.
+
+- **A failure on a resumed run deleted everything already downloaded.** `written
+  == 0` means "this process wrote nothing", not "the file is empty". The state file
+  survived pointing mid-archive, so the next run appended only the tail and
+  recorded `complete: true`. Same for a window that closes under a resumed run --
+  a key rotated out of a scheduler's environment, a lapsed subscription -- which
+  additionally exited 0, so the scheduler logged success, and became a permanent
+  trap.
+
+- **Resuming across versions, formats or SDKs corrupted the file.** One state file
+  served both formats, so `ndjson` then `csv` then `ndjson` doubled every row in
+  the first file; and the state carried nothing about the header, so 3.3.0's
+  19-column file resumed under this build appended 41-field rows beneath it. The
+  state file is now `<parkId>.<format>.backfill-state.json` and records the SDK,
+  its version, a state version and a fingerprint of the exact header. Anything that
+  does not match is refused with a message saying why, never resumed.
+
+- **A network failure or timeout now exits 75, not 1**, so a scheduler retries
+  rather than alerting; anything the API actively rejected still exits 1. The
+  JavaScript SDK had these the other way round.
+
+- **A carriage return in an entity name was written unquoted on Python 3.9 and
+  3.10**, so one row parsed as two with every later column shifted. The `csv`
+  module's QUOTE_MINIMAL only quotes characters that appear in the line terminator,
+  and this command sets LF; 3.11 changed the module to always quote CR and LF, so
+  the defect was invisible on a modern interpreter and live on two supported ones.
+  The CSV writer now does its own minimal quoting, which also makes the output
+  byte-identical across Python versions rather than only within one.
+
+- **UTC timestamps are written `Z`, not `+00:00`**, and CSV line endings are LF.
+  Between them these accounted for 39,201 differing lines against the JavaScript
+  SDK's output for no difference in meaning.
+
+- **One park's failure no longer abandons the rest of a destination.** Every park
+  is tried, what failed is named at the end, and the exit code still says something
+  went wrong. A spent budget still stops everything, deliberately.
+
+- **A failed park no longer leaves a 0-byte file** that reads as "this park has no
+  history", including when the budget runs out before the first page.
+
+- **A network failure, a full disk or Ctrl-C is a sentence, not a traceback.**
+
+- **The user agent named neither version.** It was the literal
+  `themeparks-backfill/1`, and it replaced the SDK's own, so a support question had
+  no version to work from at either end.
+
+- **`--list <text>` reported the wrong total**, printing "all 1 parks" for a
+  destination with six -- on the one line whose whole job is that number.
+
+- **An ambiguous name listed the wrong candidates**, widening to substrings and
+  offering a third park that was not what was typed. It now lists the ids of the
+  parks that actually match, sorted by name.
+
+- **A collection of nested models would have produced phantom columns** and then an
+  `AttributeError` on the first row. Duplicate column names are now impossible at
+  import rather than a wrong number under a right-looking header.
+
+- **The NDJSON identity columns could be overwritten by the row** once models kept
+  undeclared fields.
+
+### Added
+
+- **The CSV carries a UTF-8 BOM**, so Excel on Windows stops rendering
+  `Walt Disney World® Resort` as mojibake.
+- **A cell a spreadsheet would execute is prefixed with an apostrophe** (`=`, `+`,
+  `-`, `@`, tab, CR). Numeric cells are left alone, so a negative number stays a
+  number.
+- **`on_page` on `days()` and `days_with_entities()`**, called once every row of a
+  page has been yielded, with a `HistoryPage` (`start`, `end`, `next_url`). The page
+  boundary is the server's own answer to "where do I carry on", and the rows cannot
+  tell you.
+- **`--version`.**
+- `EntityRef` and `HistoryPage` are exported from the package.
+- `tests/fixtures/csv_contract.json`, an identical copy of which lives in the
+  JavaScript SDK. Both suites assert their column list against it, because this is
+  one command with two implementations and a customer using both should get one
+  file format.
+
+### Changed
+
+- The `themeparks-backfill` entry point is `themeparks.backfill:cli`, which adds
+  the top-level error handling. `main()` is unchanged for anyone calling it.
+- Model equality and `model_json_schema()` reflect `extra="allow"`: two responses
+  differing only in an undeclared field now compare unequal, and dumps may contain
+  fields the schema does not list.
+
 ## [3.3.0] - 2026-09-28
 
 ### Added
