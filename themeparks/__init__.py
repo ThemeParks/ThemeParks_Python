@@ -10,6 +10,7 @@ from themeparks._errors import (
     ThemeParksError,
     TimeoutError,
 )
+from themeparks._ratelimit import RateLimit, RateLimits
 from themeparks._transport import RetryConfig
 
 __all__ = [
@@ -17,6 +18,8 @@ __all__ = [
     "AsyncThemeParks",
     "BudgetExhaustedError",
     "HistorySpan",
+    "RateLimit",
+    "RateLimits",
     "Cache",
     "CacheConfig",
     "InMemoryLRUCache",

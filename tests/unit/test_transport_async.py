@@ -153,5 +153,9 @@ class TestRetryAfterCapAsync:
         transport, slept, calls = self._run_setup("5", RetryConfig())
         with pytest.raises(RateLimitError):
             await transport.get("/anything")
-        assert slept == [5.0, 5.0, 5.0]
+        # Jittered: the gate is shared, so without a little spread every
+        # waiter would wake at the same instant and re-trip the limit
+        # together. One wait per retry, taken once, never doubled.
+        assert len(slept) == 3
+        assert all(5.0 <= s < 5.3 for s in slept), slept
         assert len(calls) == 4
