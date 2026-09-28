@@ -1345,3 +1345,48 @@ class TestTheEntityTypeIsTheApisString:
             entityType = "ATTRACTION"  # noqa: N815 - the API's own spelling
 
         assert _ref(FakeEntity()).entity_type == "ATTRACTION"
+
+
+class TestAnAnonymousRunSaysSoWhenItFinishes:
+    """The warning at the START scrolls away. The last line must carry it too.
+
+    Running the documented example without a key succeeds: 433 rows of Magic
+    Kingdom instead of ~94,000, exit 0, and a file. A customer who has just paid
+    for 400 days has no reason to think anything went wrong -- the notice was
+    four lines printed before a run that takes minutes, and the last thing on
+    screen is "done: 433 rows".
+    """
+
+    def _run(self, tmp_path: Path, argv: list[str], monkeypatch) -> None:
+        monkeypatch.setattr(backfill, "_catalogue", lambda tp: [("p", "Park", "d", "Dest")])
+        monkeypatch.setattr(backfill, "_run_all", lambda tp, targets, args: 0)
+        monkeypatch.setattr(backfill, "ThemeParks", lambda **kw: _NullClient())
+        backfill.main([*argv, "--out", str(tmp_path)])
+
+    def test_an_anonymous_run_says_so_at_the_end(self, tmp_path: Path, capsys, monkeypatch) -> None:
+        monkeypatch.delenv("THEMEPARKS_API_KEY", raising=False)
+        self._run(tmp_path, ["p"], monkeypatch)
+        err = capsys.readouterr().err
+        # Both ends: before, so it can be acted on, and after, so it is the last
+        # thing read.
+        assert err.count("7 days") >= 2
+        assert "ANONYMOUS ACCESS" in err
+        assert err.rstrip().endswith("keys: https://www.themeparks.wiki/profile")
+
+    def test_a_run_with_a_key_says_nothing_of_the_sort(
+        self, tmp_path: Path, capsys, monkeypatch
+    ) -> None:
+        self._run(tmp_path, ["p", "--api-key", "tpw_test"], monkeypatch)
+        err = capsys.readouterr().err
+        assert "ANONYMOUS" not in err
+        assert "no API key" not in err
+
+
+class _NullClient:
+    """A client that is never actually used: _run_all is stubbed out."""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        return False

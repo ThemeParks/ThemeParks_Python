@@ -1090,6 +1090,10 @@ def _print_list(catalogue: list[tuple[str, str, str, str]], needle: str | None) 
 
 
 EPILOG = """examples:
+  export THEMEPARKS_API_KEY=tpw_your_key
+      how far back this reaches is your plan, so without a key you get the 7
+      days anonymous access allows -- and the run still succeeds, quietly.
+
   themeparks-backfill "Disneyland Park"
       the whole daily history your plan reaches, as NDJSON, into the current
       directory
@@ -1248,7 +1252,21 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
 
-        return _run_all(tp, targets, args)
+        status = _run_all(tp, targets, args)
+        # SAID AGAIN AT THE END, and this is the point of it. The warning above
+        # is printed before a run that takes minutes, so it scrolls away, and the
+        # last thing on screen is "done: 433 rows" -- which for a customer who
+        # thought they were downloading five years is indistinguishable from
+        # success. They paid for 400 days and got seven, exit 0, no complaint.
+        if not args.api_key:
+            print(
+                "\nthat was ANONYMOUS ACCESS: the last 7 days only.\n"
+                "  a free key reads 30 days, Pro 400, Business the whole archive\n"
+                "  set THEMEPARKS_API_KEY and run the same command again\n"
+                "  keys: https://www.themeparks.wiki/profile",
+                file=sys.stderr,
+            )
+        return status
     return 0
 
 
