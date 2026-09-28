@@ -1,0 +1,156 @@
+{
+  "_comment": [
+    "THE MUTANTS, COMMITTED, because the alternative is grading my own homework.",
+    "",
+    "A mutation run is only as good as its mutant list, and a list written by the",
+    "same person as the tests contains the mutations those tests already catch. On",
+    "2026-09-28 that produced a 14/14 score on this package while an independent",
+    "reviewer's 54-mutant sweep found 27 survivors -- including a checkpoint that",
+    "recorded the newest row instead of the page boundary, which is the defect the",
+    "release existed to fix, and a drift gate that still passed with 30 of 36",
+    "columns dropped.",
+    "",
+    "Committing the list is most of the value: a reviewer can read what is being",
+    "checked and, more importantly, what is not. Add a mutant whenever a defect",
+    "reaches main -- the mutation is the proof the new test would have caught it.",
+    "",
+    "Each entry replaces `find` with `replace` in `file`, once, then runs the whole",
+    "suite. A SURVIVOR is a change to production code that breaks nothing, which",
+    "means either the tests are blind to it or the code does not matter."
+  ],
+  "mutants": [
+    {
+      "name": "checkpoint the newest row instead of the page boundary",
+      "file": "themeparks/backfill.py",
+      "find": "progress.resume_from = _next_page_start(page.next_url)",
+      "replace": "progress.resume_from = page.end",
+      "why": "The defect 4.0.0 exists to fix. An entity that stopped reporting has no rows for the tail days of its page, so a row-derived checkpoint re-downloads days already written."
+    },
+    {
+      "name": "resume ignores the recorded boundary",
+      "file": "themeparks/backfill.py",
+      "find": "resume_at = (state.get(\"resumeFrom\") or state.get(\"lastDay\")) if resuming else None",
+      "replace": "resume_at = state.get(\"lastDay\") if resuming else None",
+      "why": "The fallback is for state files with no boundary. Preferring it always reintroduces the duplicate."
+    },
+    {
+      "name": "a resumed run losing its BUDGET deletes the accumulated file",
+      "file": "themeparks/backfill.py",
+      "find": "        if progress.written == 0 and not resumed_run:\n            # A budget spent before the first page left a 0-byte file that reads\n            # as \"this park has no history\".\n            out_path.unlink(missing_ok=True)",
+      "replace": "        if progress.written == 0:\n            out_path.unlink(missing_ok=True)",
+      "why": "Exit 75 is the ORDINARY outcome of a long back fill, so this is the more dangerous of the two sites: the file vanishes, the next run appends only the tail and records complete."
+    },
+    {
+      "name": "a resumed run failing any OTHER way deletes the accumulated file",
+      "file": "themeparks/backfill.py",
+      "find": "        if progress.written == 0 and not resumed_run:\n            out_path.unlink(missing_ok=True)\n        raise",
+      "replace": "        if progress.written == 0:\n            out_path.unlink(missing_ok=True)\n        raise",
+      "why": "`written` counts rows THIS process wrote. On a resumed run the file holds everything the previous runs fetched."
+    },
+    {
+      "name": "the column fingerprint is ignored",
+      "file": "themeparks/backfill.py",
+      "find": "if state.get(\"columns\") != _columns_fingerprint(fmt):",
+      "replace": "if False:",
+      "why": "3.3.0's 19-column file resuming under a 41-column build appends rows no reader can parse."
+    },
+    {
+      "name": "a state file from the other SDK is accepted",
+      "file": "themeparks/backfill.py",
+      "find": "if state.get(\"sdk\") != SDK_NAME:",
+      "replace": "if False:",
+      "why": "The two SDKs' keys differ only on the interrupted path, so the safe paths interoperate silently and a cross-SDK resume duplicates."
+    },
+    {
+      "name": "the format leaves the state filename",
+      "file": "themeparks/backfill.py",
+      "find": "return out_dir / f\"{park_id}.{fmt}{STATE_SUFFIX}\"",
+      "replace": "return out_dir / f\"{park_id}{STATE_SUFFIX}\"",
+      "why": "One state file for two formats doubles every row on an ndjson -> csv -> ndjson round trip."
+    },
+    {
+      "name": "a unique substring returns the display label as the park name",
+      "file": "themeparks/backfill.py",
+      "find": "    if len(park_hits) == 1:\n        return park_hits",
+      "replace": "    if len(park_hits) == 1:\n        return [(pid, f\"{pname}  (x)\") for pid, pname in park_hits]",
+      "why": "Shipped in 3.3.0: parkName read 'Magic Kingdom Park  (Walt Disney World\u00ae Resort)' for ~94,000 rows."
+    },
+    {
+      "name": "normalize becomes a bare casefold",
+      "file": "themeparks/backfill.py",
+      "find": "    folded = unicodedata.normalize(\"NFKD\", value.casefold())\n    return \"\".join(c for c in folded if c.isalnum() and not unicodedata.combining(c))",
+      "replace": "    return value.casefold()",
+      "why": "Five live park names carry \u00ae, a curly apostrophe or an accent, and the documented example is one of them."
+    },
+    {
+      "name": "an exact destination no longer beats an exact park",
+      "file": "themeparks/backfill.py",
+      "find": "    if len(exact_dest) == 1:\n        return parks_in(next(iter(exact_dest)))",
+      "replace": "    if False:\n        return parks_in(next(iter(exact_dest)))",
+      "why": "Seven real names are both a destination and one of its several parks. Cedar Point would download one of two."
+    },
+    {
+      "name": "the CSV writer stops quoting a carriage return",
+      "file": "themeparks/backfill.py",
+      "find": "    if any(ch in text for ch in ('\"', \",\", \"\\r\", \"\\n\")):",
+      "replace": "    if any(ch in text for ch in ('\"', \",\", \"\\n\")):",
+      "why": "Python's csv module did exactly this on 3.9 and 3.10, and one row parsed as two."
+    },
+    {
+      "name": "the CSV loses its BOM",
+      "file": "themeparks/backfill.py",
+      "find": "handle.write(\"\\ufeff\" + _csv_line(dict(zip(CSV_COLUMNS, CSV_COLUMNS))))",
+      "replace": "handle.write(_csv_line(dict(zip(CSV_COLUMNS, CSV_COLUMNS))))",
+      "why": "Excel on Windows then reads the local code page and mangles every \u00ae and accent."
+    },
+    {
+      "name": "a negative number is prefixed as a formula",
+      "file": "themeparks/backfill.py",
+      "find": "    if not text.startswith(_FORMULA_LEADERS) or _NUMERIC.match(text):",
+      "replace": "    if not text.startswith(_FORMULA_LEADERS):",
+      "why": "Every negative value in the file becomes text and arithmetic breaks in the tool the prefixing protects."
+    },
+    {
+      "name": "the row renames the run",
+      "file": "themeparks/backfill.py",
+      "find": "        payload.update(identity)",
+      "replace": "        pass",
+      "why": "Models keep undeclared fields, so a row carrying its own entityId would relabel every line of a paid export."
+    },
+    {
+      "name": "a collection of models is flattened as a nested block",
+      "file": "themeparks/backfill.py",
+      "find": "    if get_origin(annotation) in _COLLECTION_ORIGINS:\n        return None\n",
+      "replace": "",
+      "why": "Phantom columns in the header, then AttributeError on the first row, the moment the API adds an array of objects."
+    },
+    {
+      "name": "a network failure exits 1 instead of 75",
+      "file": "themeparks/backfill.py",
+      "find": "        return EX_TEMPFAIL\n    except ThemeParksError as exc:",
+      "replace": "        return 1\n    except ThemeParksError as exc:",
+      "why": "A resumable failure should make a scheduler retry, not alert."
+    },
+    {
+      "name": "the page hook fires before its rows",
+      "file": "themeparks/_ergonomic/history.py",
+      "find": "            yield from _daily_entity_rows(envelope)\n            # AFTER the rows, never before: a caller checkpointing on this has to\n            # be able to trust that everything the page held is already written.\n            if on_page is not None:\n                on_page(_page_of(envelope))",
+      "replace": "            if on_page is not None:\n                on_page(_page_of(envelope))\n            yield from _daily_entity_rows(envelope)",
+      "why": "A consumer that died mid-page would record a checkpoint past rows it never wrote. Losing rows is worse than duplicating them."
+    },
+    {
+      "name": "the entity label comes from somewhere other than the response",
+      "file": "themeparks/_ergonomic/history.py",
+      "find": "    inner = getattr(kind, \"value\", kind)",
+      "replace": "    inner = kind",
+      "why": "`str(EntityType.SHOW)` is 'EntityType.SHOW', so a customer filtering on 'SHOW' matches nothing and is told nothing."
+    },
+    {
+      "name": "models stop keeping undeclared fields",
+      "file": "themeparks/_models_base.py",
+      "find": "    model_config = ConfigDict(extra=\"allow\")",
+      "replace": "    model_config = ConfigDict(extra=\"ignore\")",
+      "why": "A stale vendored spec then deletes real data at parse time, which is how unknownMinutes, inParkHours and extremeWaits were lost."
+    }
+  ]
+}
