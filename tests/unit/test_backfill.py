@@ -822,7 +822,7 @@ class TestOneParkFailingIsNotTheRunFailing:
     ) -> None:
         attempted: list[str] = []
 
-        def fake_backfill(tp, park, out_dir, fmt, overwrite=False):
+        def fake_backfill(tp, park, out_dir, fmt, overwrite=False, **_kw):
             attempted.append(park.id)
             if park.id == "p2":
                 raise APIError("500 Server Error", status=500, body={}, url="u")
@@ -842,7 +842,7 @@ class TestOneParkFailingIsNotTheRunFailing:
         # where it got to.
         attempted: list[str] = []
 
-        def fake_backfill(tp, park, out_dir, fmt, overwrite=False):
+        def fake_backfill(tp, park, out_dir, fmt, overwrite=False, **_kw):
             attempted.append(park.id)
             return backfill.EX_TEMPFAIL
 

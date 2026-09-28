@@ -29,8 +29,8 @@
     {
       "name": "resume ignores the recorded boundary",
       "file": "themeparks/backfill.py",
-      "find": "resume_at = (state.get(\"resumeFrom\") or state.get(\"lastDay\")) if resuming else None",
-      "replace": "resume_at = state.get(\"lastDay\") if resuming else None",
+      "find": "resume_at = state.get(\"resumeFrom\") or state.get(\"lastDay\")",
+      "replace": "resume_at = state.get(\"lastDay\")",
       "why": "The fallback is for state files with no boundary. Preferring it always reintroduces the duplicate."
     },
     {
@@ -151,6 +151,76 @@
       "find": "    model_config = ConfigDict(extra=\"allow\")",
       "replace": "    model_config = ConfigDict(extra=\"ignore\")",
       "why": "A stale vendored spec then deletes real data at parse time, which is how unknownMinutes, inParkHours and extremeWaits were lost."
+    },
+    {
+      "name": "a run ends at retrievable_through again",
+      "file": "themeparks/backfill.py",
+      "find": "end: Day = span.final_through",
+      "replace": "end: Day = span.retrievable_through",
+      "why": "4.0.1 ended every run on today, so the newest rows in every file were partial days, and nothing ever replaced them."
+    },
+    {
+      "name": "final_through ignores recorded_to",
+      "file": "themeparks/_ergonomic/history.py",
+      "find": "return min(self.recorded_to, self.retrievable_through)",
+      "replace": "return self.retrievable_through",
+      "why": "The same defect one layer down: the final boundary becomes today again for every caller of span()."
+    },
+    {
+      "name": "a finished park is left alone again",
+      "file": "themeparks/backfill.py",
+      "find": "if end is None or continue_at > str(end):",
+      "replace": "if True:",
+      "why": "4.0.1's behaviour: a rerun of a finished park printed that it was complete and exited 0, so a nightly cron never fetched another day."
+    },
+    {
+      "name": "a rerun interrupted before its first page forgets where it began",
+      "file": "themeparks/backfill.py",
+      "find": "        return self.first_day\n",
+      "replace": "        return None\n",
+      "why": "With no page boundary and no row, the state recorded nothing, and the next run fell back to the top of the archive and appended a second copy of it."
+    },
+    {
+      "name": "a finished state written to another contract is appended to",
+      "file": "themeparks/backfill.py",
+      "find": "    if mismatch is not None:\n",
+      "replace": "    if mismatch is not None and not state.get(\"complete\"):\n",
+      "why": "Only unfinished mismatched states were refused; a finished one fell through to a fresh start in append mode and doubled the file under a second header."
+    },
+    {
+      "name": "a state file with no data file is continued",
+      "file": "themeparks/backfill.py",
+      "find": "    if state and not file_exists:\n        state = {}\n",
+      "replace": "",
+      "why": "Continuing writes a file that starts part-way through its range and records it complete."
+    },
+    {
+      "name": "a 4.0 file keeps its partial tail",
+      "file": "themeparks/backfill.py",
+      "find": "        _trim_after(out_path, fmt, keep_through)\n",
+      "replace": "        pass\n",
+      "why": "The partial days 4.0 wrote stay in the file for good, next to nothing that would ever correct them."
+    },
+    {
+      "name": "--since is ignored on a first run",
+      "file": "themeparks/backfill.py",
+      "find": "start = _later(rng.since, ask.archive_from) if rng.since is not None else ask.archive_from",
+      "replace": "start = ask.archive_from",
+      "why": "The customer asked for a year and got the whole archive, which is the defect --since exists to fix."
+    },
+    {
+      "name": "a --since that would leave a gap is accepted",
+      "file": "themeparks/backfill.py",
+      "find": "if since is not None and str(since) > continue_at:",
+      "replace": "if False:",
+      "why": "The file would skip days the state file then claims it holds."
+    },
+    {
+      "name": "changes() loses a park's openings",
+      "file": "themeparks/_ergonomic/history.py",
+      "find": "return {entity.id: entity.opening for entity in entities}",
+      "replace": "return {}",
+      "why": "The opening is the state before the first change; without it a day cannot be rebuilt from raw history."
     }
   ]
 }
