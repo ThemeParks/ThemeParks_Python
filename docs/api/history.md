@@ -23,6 +23,10 @@ hundred times fewer calls than the same data fetched ride by ride.
     options:
       heading_level: 2
 
+::: themeparks.HistoryOpening
+    options:
+      heading_level: 2
+
 ::: themeparks.HistorySpan
     options:
       heading_level: 2

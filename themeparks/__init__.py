@@ -17,6 +17,7 @@ from themeparks._errors import (
     ThemeParksError,
     TimeoutError,
 )
+from themeparks._generated.models import HistoryOpening
 from themeparks._ratelimit import RateLimit, RateLimits
 from themeparks._transport import RetryConfig
 
@@ -27,6 +28,7 @@ __all__ = [
     "BudgetExhaustedError",
     "EntityRef",
     "HistoryChanges",
+    "HistoryOpening",
     "HistoryPage",
     "HistorySpan",
     "RateLimit",

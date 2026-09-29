@@ -21,6 +21,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+import themeparks
 from themeparks import AsyncThemeParks, ThemeParks
 from themeparks._ergonomic.history import HistoryChanges
 from themeparks._generated.models import HistoryOpening
@@ -208,3 +209,32 @@ class TestAsyncOpening:
             changes = tp.entity(SPACE_MOUNTAIN).history.changes("2026-09-26")
             with pytest.raises(RuntimeError, match="load"):
                 _ = changes.opening
+
+
+class TestClosing:
+    def test_close_ends_iteration_without_a_request(self) -> None:
+        seen: list[str] = []
+        changes = _client(RAW, seen).entity(SPACE_MOUNTAIN).history.changes("2026-09-26")
+        changes.close()
+        assert list(changes) == []
+        assert seen == []
+
+    def test_close_part_way_stops_there(self) -> None:
+        changes = _client(RAW).entity(SPACE_MOUNTAIN).history.changes("2026-09-26")
+        next(changes)
+        changes.close()
+        assert list(changes) == []
+
+    async def test_aclose_ends_async_iteration(self) -> None:
+        async with _async_client(RAW) as tp:
+            changes = tp.entity(SPACE_MOUNTAIN).history.changes("2026-09-26")
+            await changes.__anext__()
+            await changes.aclose()
+            assert [pair async for pair in changes] == []
+
+
+def test_history_opening_is_exported() -> None:
+    # The type of `opening`'s values, importable to annotate against.
+    assert themeparks.HistoryOpening is HistoryOpening
+    assert "HistoryOpening" in themeparks.__all__
+    assert "degraded" in HistoryOpening.model_fields

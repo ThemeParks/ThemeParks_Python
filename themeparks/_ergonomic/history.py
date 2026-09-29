@@ -70,14 +70,19 @@ class HistorySpan(NamedTuple):
 
     @property
     def final_through(self) -> _date | None:
-        """The newest day whose daily rows will not change again, or None.
+        """The newest day the archive has recorded that this key may read, or None.
 
         `retrievable_through` is usually today, and today's row is the day so
         far. Recent days can still change after that: a run that crosses
         midnight is reported on the day it started, and the archive records
         days 2 to 3 behind live data. `recorded_to` is the newest day the
-        archive holds, so a day on or before it is final. Store those; ask for
+        archive holds, so a day on or before it is what the server has
+        recorded, and is the place to stop if you fetch each day once. Ask for
         anything later again once `final_through` has moved past it.
+
+        Recorded is not immutable: the server can re-record a past day, for
+        example after repairing a park's feed. Fetch a range again if you need
+        to pick that up.
 
         The earlier of the two dates, because a key may be entitled to fewer
         days than the archive holds. None when either is unknown.
@@ -248,7 +253,13 @@ class HistoryChanges(Iterator[tuple[str, HistoryRow]]):
 
     Nothing is requested until the result is first used, as when this was a
     plain generator, and reading `opening` before or after iterating costs the
-    same single request.
+    same single request. `close()` ends it early, as it did a generator.
+
+    An opening can be incomplete: `degraded` is true when the server could not
+    look far enough back in time for this response, and `degradedReason` says
+    why. Fields may then be missing from it; ask again a minute later for the
+    full opening. `observedAt` is when that state was last seen, which can be
+    long before the range for an entity whose feed stopped.
     """
 
     def __init__(self, fetch: Callable[[], RawEnvelope]) -> None:
@@ -273,6 +284,10 @@ class HistoryChanges(Iterator[tuple[str, HistoryRow]]):
         if self._rows is None:
             self._rows = _raw_rows(self._loaded())
         return next(self._rows)
+
+    def close(self) -> None:
+        """Stop iterating. Later `next()` raises StopIteration; no request is made."""
+        self._rows = iter(())
 
 
 class AsyncHistoryChanges(AsyncIterator[tuple[str, HistoryRow]]):
@@ -318,6 +333,10 @@ class AsyncHistoryChanges(AsyncIterator[tuple[str, HistoryRow]]):
             return next(self._rows)
         except StopIteration:
             raise StopAsyncIteration from None
+
+    async def aclose(self) -> None:
+        """Stop iterating, as `aclose()` did on the async generator this replaced."""
+        self._rows = iter(())
 
 
 class HistoryApi:
