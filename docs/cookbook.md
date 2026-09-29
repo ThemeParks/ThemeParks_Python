@@ -283,7 +283,7 @@ with ThemeParks() as tp:
     live = tp.entity(MAGIC_KINGDOM).live()
     for entry in live.liveData or []:
         for q in iter_queues(entry):
-            # q is e.g. {"type": "STANDBY", "waitTime": 45}
+            # q is e.g. {"type": "STANDBY", "waitTime": 45.0}
             #         or {"type": "PAID_RETURN_TIME", "state": "AVAILABLE", "price": {...}, ...}
             print(entry.name, q["type"], q)
 ```
@@ -306,7 +306,10 @@ last day your key may retrieve, so you ask for days that exist instead of
 discovering the ends by trial. Bound the backfill by `retrievable_through`,
 not by `recorded_to`: the archive holds more than a free or Pro key is
 entitled to read, and asking past the entitlement is how a backfill walks into
-a wall of 403s at the end of a long run.
+a wall of 403s at the end of a long run. If you write each day once and never
+revisit it, end at `span.final_through` instead: the earlier of the two, and
+the newest day the archive has recorded. The archive can re-record a past day
+after a feed repair, so fetch a range again if you need to pick that up.
 
 ```python
 import json
@@ -392,8 +395,15 @@ range above is refused on its FIRST request unless you already know your floor.
 The command reads it out of the 403 and starts again there.
 
 **Re-running.** The loop above appends, so running it twice doubles the file.
-The command records what it wrote and declines to fetch a finished park again
-unless you pass `--overwrite`.
+The command records what it wrote, and a second run carries a finished park
+forward from the day after its last one instead, so a nightly cron keeps the
+file current. `--since` and `--until` pick the days; `--overwrite` starts again.
+
+**Days that are not final yet.** The loop above ends at `retrievable_through`,
+usually today, and today's row is the day so far. Recent days can still change
+too, because the archive records days 2 to 3 behind live data. Stop at
+`span.final_through` if you store rows once, as the command does, or fetch the
+days after it again on your next run.
 
 It also takes destinations as well as parks, names every row with the park and
 the entity as the history response reported them, and has `--list` for finding
@@ -412,6 +422,26 @@ with ThemeParks(api_key="YOUR_KEY") as tp:
     for entity_id, row in tp.entity(DISNEYLAND).history.changes("2026-09-20"):
         print(row.time, entity_id, row.status, row.queue)
 ```
+
+To rebuild what an entity was doing at any moment, you also need the state
+before its first change. That is `opening`, keyed by entity id, on the same
+result:
+
+```python
+with ThemeParks(api_key="YOUR_KEY") as tp:
+    changes = tp.entity(DISNEYLAND).history.changes("2026-09-20")
+    rows = list(changes)
+    for entity_id, opening in changes.opening.items():
+        # In force from opening.time until this entity's first row.
+        print(entity_id, opening.time, opening.status)
+```
+
+Each row holds from its `time` until the next row's, so `opening` plus the
+rows cover the whole range with no gap. Without it, a ride that was still
+running from the night before has no known status until its first change.
+`opening.observedAt` says when that state was last seen, which can be long
+before the range for a ride whose feed stopped. With the async client, iterate
+first or call `await changes.load()` before reading `opening`.
 
 A park answers one day per call. A single entity answers up to 31 days, so
 pass `start=` and `end=` there instead of `date=`. You do not have to

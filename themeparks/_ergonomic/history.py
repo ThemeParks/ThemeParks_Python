@@ -20,7 +20,7 @@ the cheap path here without having to know the expensive one exists.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Callable, Iterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from datetime import date as _date
 from typing import Any, NamedTuple, Union
 
@@ -30,6 +30,7 @@ from themeparks._generated.models import (
     HistoryDailyEnvelope,
     HistoryDailyRow,
     HistoryEnvelope,
+    HistoryOpening,
     HistoryParkCoverageDocument,
     HistoryParkDailyEnvelope,
     HistoryParkRawEnvelope,
@@ -66,6 +67,29 @@ class HistorySpan(NamedTuple):
     archive_from: _date | None
     recorded_to: _date | None
     retrievable_through: _date | None
+
+    @property
+    def final_through(self) -> _date | None:
+        """The newest day the archive has recorded that this key may read, or None.
+
+        `retrievable_through` is usually today, and today's row is the day so
+        far. Recent days can still change after that: a run that crosses
+        midnight is reported on the day it started, and the archive records
+        days 2 to 3 behind live data. `recorded_to` is the newest day the
+        archive holds, so a day on or before it is what the server has
+        recorded, and is the place to stop if you fetch each day once. Ask for
+        anything later again once `final_through` has moved past it.
+
+        Recorded is not immutable: the server can re-record a past day, for
+        example after repairing a park's feed. Fetch a range again if you need
+        to pick that up.
+
+        The earlier of the two dates, because a key may be entitled to fewer
+        days than the archive holds. None when either is unknown.
+        """
+        if self.recorded_to is None or self.retrievable_through is None:
+            return None
+        return min(self.recorded_to, self.retrievable_through)
 
 
 def _span(document: CoverageDocument) -> HistorySpan:
@@ -194,6 +218,14 @@ def _daily_rows(envelope: DailyEnvelope) -> Iterator[tuple[str, HistoryDailyRow]
         yield (ref.id, row)
 
 
+def _openings(envelope: RawEnvelope) -> dict[str, HistoryOpening]:
+    """Each entity's `opening`, keyed by id, in the order the response lists them."""
+    entities = getattr(envelope, "entities", None)
+    if entities is not None:
+        return {entity.id: entity.opening for entity in entities}
+    return {envelope.id: envelope.opening}  # type: ignore[union-attr]
+
+
 def _raw_rows(envelope: RawEnvelope) -> Iterator[tuple[str, HistoryRow]]:
     entities = getattr(envelope, "entities", None)
     if entities is not None:
@@ -203,6 +235,108 @@ def _raw_rows(envelope: RawEnvelope) -> Iterator[tuple[str, HistoryRow]]:
         return
     for row in getattr(envelope, "history", None) or []:
         yield (envelope.id, row)
+
+
+class HistoryChanges(Iterator[tuple[str, HistoryRow]]):
+    """What :meth:`HistoryApi.changes` returns: the rows, and the state before them.
+
+    Iterate it exactly as before, for `(entity id, row)` pairs. Each row is the
+    entity's complete live data from its `time` until the next row's.
+
+    `opening` is the one thing the rows cannot tell you: the state in force at
+    the START of the range, before the first change. Without it the stretch
+    between midnight and an entity's first change has no known status -- on a
+    night a ride runs past midnight that is real operating time, and a day
+    rebuilt from the rows alone disagrees with the daily summary. It is a dict
+    of :class:`HistoryOpening` keyed by entity id, with an entry for every
+    entity in the response, including one that did not change at all that day.
+
+    Nothing is requested until the result is first used, as when this was a
+    plain generator, and reading `opening` before or after iterating costs the
+    same single request. `close()` ends it early, as it did a generator.
+
+    An opening can be incomplete: `degraded` is true when the server could not
+    look far enough back in time for this response, and `degradedReason` says
+    why. Fields may then be missing from it; ask again a minute later for the
+    full opening. `observedAt` is when that state was last seen, which can be
+    long before the range for an entity whose feed stopped.
+    """
+
+    def __init__(self, fetch: Callable[[], RawEnvelope]) -> None:
+        self._fetch = fetch
+        self._envelope: RawEnvelope | None = None
+        self._rows: Iterator[tuple[str, HistoryRow]] | None = None
+
+    def _loaded(self) -> RawEnvelope:
+        if self._envelope is None:
+            self._envelope = self._fetch()
+        return self._envelope
+
+    @property
+    def opening(self) -> dict[str, HistoryOpening]:
+        """The state at the start of the range, per entity id."""
+        return _openings(self._loaded())
+
+    def __iter__(self) -> HistoryChanges:
+        return self
+
+    def __next__(self) -> tuple[str, HistoryRow]:
+        if self._rows is None:
+            self._rows = _raw_rows(self._loaded())
+        return next(self._rows)
+
+    def close(self) -> None:
+        """Stop iterating. Later `next()` raises StopIteration; no request is made."""
+        self._rows = iter(())
+
+
+class AsyncHistoryChanges(AsyncIterator[tuple[str, HistoryRow]]):
+    """What :meth:`AsyncHistoryApi.changes` returns. See :class:`HistoryChanges`.
+
+    Iterate it with `async for`. A property cannot await, so `opening` is
+    readable once the response has arrived: after the first step of iteration,
+    or straight away with `changes = await history.changes(day).load()`.
+    """
+
+    def __init__(self, fetch: Callable[[], Awaitable[RawEnvelope]]) -> None:
+        self._fetch = fetch
+        self._envelope: RawEnvelope | None = None
+        self._rows: Iterator[tuple[str, HistoryRow]] | None = None
+
+    async def _loaded(self) -> RawEnvelope:
+        if self._envelope is None:
+            self._envelope = await self._fetch()
+        return self._envelope
+
+    async def load(self) -> AsyncHistoryChanges:
+        """Make the request now, if it has not been made, and return this object."""
+        await self._loaded()
+        return self
+
+    @property
+    def opening(self) -> dict[str, HistoryOpening]:
+        """The state at the start of the range, per entity id."""
+        if self._envelope is None:
+            raise RuntimeError(
+                "the response has not arrived yet: iterate first, or "
+                "`await changes.load()` before reading `opening`"
+            )
+        return _openings(self._envelope)
+
+    def __aiter__(self) -> AsyncHistoryChanges:
+        return self
+
+    async def __anext__(self) -> tuple[str, HistoryRow]:
+        if self._rows is None:
+            self._rows = _raw_rows(await self._loaded())
+        try:
+            return next(self._rows)
+        except StopIteration:
+            raise StopAsyncIteration from None
+
+    async def aclose(self) -> None:
+        """Stop iterating, as `aclose()` did on the async generator this replaced."""
+        self._rows = iter(())
 
 
 class HistoryApi:
@@ -307,21 +441,28 @@ class HistoryApi:
         start: str | _date | None = None,
         end: str | _date | None = None,
         max_wait: float = DEFAULT_MAX_WAIT_SECONDS,
-    ) -> Iterator[tuple[str, HistoryRow]]:
-        """Every recorded change, as (entity id, row).
+    ) -> HistoryChanges:
+        """Every recorded change, as (entity id, row), plus the state before them.
 
         A single day for a park, or up to 31 days for one entity. The caller
         does not have to know which cap applies: ask for what you want and the
         API answers or tells you the range is too long.
+
+        Iterate the result for the rows. Its `opening` is each entity's state at
+        the start of the range, which is what a day has to be rebuilt from --
+        see :class:`HistoryChanges`.
         """
-        try:
-            envelope = self._raw.get_entity_history(
-                self._id, date=_as_day(date), start=_as_day(start), end=_as_day(end)
-            )
-        except RateLimitError as exc:
-            _reraise_if_too_long(exc, max_wait)
-            raise
-        yield from _raw_rows(envelope)
+
+        def fetch() -> RawEnvelope:
+            try:
+                return self._raw.get_entity_history(
+                    self._id, date=_as_day(date), start=_as_day(start), end=_as_day(end)
+                )
+            except RateLimitError as exc:
+                _reraise_if_too_long(exc, max_wait)
+                raise
+
+        return HistoryChanges(fetch)
 
 
 class AsyncHistoryApi:
@@ -367,20 +508,27 @@ class AsyncHistoryApi:
                 _reraise_if_too_long(exc, max_wait)
                 raise
 
-    async def changes(
+    def changes(
         self,
         date: str | _date | None = None,
         *,
         start: str | _date | None = None,
         end: str | _date | None = None,
         max_wait: float = DEFAULT_MAX_WAIT_SECONDS,
-    ) -> AsyncIterator[tuple[str, HistoryRow]]:
-        try:
-            envelope = await self._raw.get_entity_history(
-                self._id, date=_as_day(date), start=_as_day(start), end=_as_day(end)
-            )
-        except RateLimitError as exc:
-            _reraise_if_too_long(exc, max_wait)
-            raise
-        for pair in _raw_rows(envelope):
-            yield pair
+    ) -> AsyncHistoryChanges:
+        """Asynchronous mirror of :meth:`HistoryApi.changes`.
+
+        Not a coroutine, as before: `async for pair in history.changes(day)`
+        works unchanged. See :class:`AsyncHistoryChanges` for `opening`.
+        """
+
+        async def fetch() -> RawEnvelope:
+            try:
+                return await self._raw.get_entity_history(
+                    self._id, date=_as_day(date), start=_as_day(start), end=_as_day(end)
+                )
+            except RateLimitError as exc:
+                _reraise_if_too_long(exc, max_wait)
+                raise
+
+        return AsyncHistoryChanges(fetch)

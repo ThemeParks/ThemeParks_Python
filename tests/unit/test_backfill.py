@@ -486,21 +486,22 @@ class TestBudgetExhaustion:
         code = backfill.backfill_park(_Client(hist), _Park("p", "P"), tmp_path, "ndjson")
         assert code == backfill.EX_TEMPFAIL == 75
 
-    def test_records_the_furthest_day_so_a_rerun_continues(self, tmp_path: Path) -> None:
+    def test_a_budget_spent_mid_first_page_resumes_from_the_last_checkpoint(
+        self, tmp_path: Path
+    ) -> None:
         hist = self._hist_that_runs_out()
         backfill.backfill_park(_Client(hist), _Park("p", "P"), tmp_path, "ndjson")
         state_file = backfill.state_path_for(tmp_path, "p", "ndjson")
         state = json.loads(state_file.read_text(encoding="utf-8"))
         assert state["complete"] is False
-        # The MAX day seen, not the last row yielded. The stub's final row is
-        # 2025-02-14, so recording "last" instead of "max" would rewind the resume
-        # point by three weeks and re-download them.
-        assert state["lastDay"] == "2025-03-09"
-        # The budget died part-way through the FIRST page, so no page boundary was
-        # ever reported and there is nothing exact to resume from. `last_day` is
-        # the documented fallback for precisely this: one duplicated day, rather
-        # than starting from the top and appending a second copy of everything.
-        assert state["resumeFrom"] is None
+        # The budget died part-way through the FIRST page, so the last checkpoint
+        # is the one written before the first request: the run's own start, and
+        # a file of 0 bytes. The rerun cuts the partial page off and starts it
+        # again. This used to resume at `lastDay`, the newest day ANY entity had
+        # reached -- 2025-03-09 here, while ent-2 had only got to 2025-02-14 --
+        # which duplicated one day and lost the slower entities' days for good.
+        assert state["resumeFrom"] == "2025-01-01"
+        assert state["size"] == 0
 
     def test_a_spent_budget_on_the_coverage_call_also_returns_75(self, tmp_path: Path) -> None:
         # span() is the FIRST request a resumed run makes, while the hourly window
@@ -606,18 +607,19 @@ class TestResumeCheckpoint:
         backfill.backfill_park(_Client(hist), _Park("p", "P"), tmp_path, "ndjson")
         assert hist.calls == ["2025-02-01"], "resumed from the newest row, not the boundary"
 
-    def test_falls_back_to_last_day_for_a_state_file_without_a_boundary(
-        self, tmp_path: Path
-    ) -> None:
-        # 3.3.0 wrote no resume_from, and a run that dies inside its first page
-        # never reports one. One duplicated day beats starting from the top and
-        # appending a second copy of the whole archive.
+    def test_a_state_file_without_a_boundary_goes_back_a_whole_page(self, tmp_path: Path) -> None:
+        # 3.3.0 wrote no resume_from, and a 4.0 run that died inside its first
+        # page never reported one. Only `lastDay` is left.
         (tmp_path / "p.ndjson").write_text('{"a": 1}\n', encoding="utf-8")
         # No boundary recorded: a run that died inside its first page.
         _state_file(tmp_path, lastDay="2025-01-28", resumeFrom=None)
         hist = _History(archive_from="2025-01-01", through="2026-09-28", floor=None)
         backfill.backfill_park(_Client(hist), _Park("p", "P"), tmp_path, "ndjson")
-        assert hist.calls == ["2025-01-28"]
+        # A page is up to 31 days, so the page that run died in began no earlier
+        # than 30 days before `lastDay`; resuming there, clamped to the file's own
+        # first day, loses no entity's days. Resuming AT `lastDay` lost the days
+        # of every entity that had not reached it.
+        assert hist.calls == ["2025-01-01"]
 
     def test_the_boundary_is_read_from_the_servers_own_url(self) -> None:
         # No date arithmetic anywhere: the server says where the next page starts
@@ -822,7 +824,7 @@ class TestOneParkFailingIsNotTheRunFailing:
     ) -> None:
         attempted: list[str] = []
 
-        def fake_backfill(tp, park, out_dir, fmt, overwrite=False):
+        def fake_backfill(tp, park, out_dir, fmt, overwrite=False, **_kw):
             attempted.append(park.id)
             if park.id == "p2":
                 raise APIError("500 Server Error", status=500, body={}, url="u")
@@ -842,7 +844,7 @@ class TestOneParkFailingIsNotTheRunFailing:
         # where it got to.
         attempted: list[str] = []
 
-        def fake_backfill(tp, park, out_dir, fmt, overwrite=False):
+        def fake_backfill(tp, park, out_dir, fmt, overwrite=False, **_kw):
             attempted.append(park.id)
             return backfill.EX_TEMPFAIL
 

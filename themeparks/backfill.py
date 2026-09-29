@@ -32,28 +32,40 @@ What it does that is easy to get wrong by hand:
    than alerts.
 
    Re-running is then safe in every direction: an unfinished park continues, a
-   FINISHED park is left alone rather than appended to twice, and a file this
-   command did not write is never touched without `--overwrite`. It re-reads the
-   furthest day on purpose -- a page can end mid-day -- so `(entityId, date)` is
-   the natural key if you load blind.
+   FINISHED park is brought up to date from the day after its last one rather
+   than appended to twice, and a file this command did not write is never
+   touched without `--overwrite`. `(entityId, date)` is the natural key if you
+   load blind: a run that died inside its first page resumes on the last day it
+   wrote, so that one day can appear twice.
 
 4. It takes NAMES as well as ids, and DESTINATIONS as well as parks. A
    customer has "Walt Disney World Resort", not four park uuids, and making
    them look those up first was another wall. A destination back fills every
    park in it, into one file each.
+
+5. It writes FINAL days only. Today's row is the day so far, and the archive
+   records days 2 to 3 behind live data, so the newest days the API serves can
+   still change. The run ends at `span().final_through`, the newest day the
+   archive holds, and the next run carries on from the day after. Each day is
+   fetched once, as the archive recorded it, so a nightly run only ever
+   appends. The archive can re-record a past day during a repair; the file does
+   not follow, and `--since`/`--until` into another `--out` fetches it again.
 """
 
 from __future__ import annotations
 
 import argparse
 import contextlib
+import csv
 import hashlib
 import json
 import os
 import re
+import signal
 import sys
 import unicodedata
-from datetime import date, datetime
+from collections.abc import Iterator
+from datetime import date, datetime, timedelta
 from datetime import date as _date
 from pathlib import Path
 from typing import Any, NamedTuple, TextIO, Union, get_args, get_origin
@@ -71,7 +83,7 @@ from themeparks import (
 )
 from themeparks import TimeoutError as ApiTimeoutError  # noqa: A004 - the SDK's, not the builtin's
 from themeparks._client import PACKAGE_VERSION, _default_user_agent
-from themeparks._ergonomic.history import EntityRef, HistoryPage
+from themeparks._ergonomic.history import EntityRef, HistoryPage, HistorySpan
 from themeparks._generated.models import HistoryDailyRow
 
 # The command's identity IN FRONT OF the SDK's, not instead of it. It used to be
@@ -275,6 +287,17 @@ def _csv_row(ref: EntityRef, row: Any, ident: _RowIdentity) -> dict[str, Any]:
     }
 
 
+class _Range(NamedTuple):
+    """The days asked for with `--since` and `--until`, both inclusive, or None.
+
+    None at either end means "as far as there is": back to where the plan
+    reaches, forward to the newest final day.
+    """
+
+    since: str | None = None
+    until: str | None = None
+
+
 class _Park(NamedTuple):
     """A park's identity, so rows can name themselves.
 
@@ -426,8 +449,19 @@ def _window_floor(exc: APIError) -> str | None:
 STATE_SUFFIX = ".backfill-state.json"
 
 #: Bumped when the meaning of a field changes. A state file from another version
-#: is refused rather than guessed at.
-STATE_VERSION = 1
+#: is refused rather than guessed at, with one exception: version 1, below.
+#:
+#: 2: `end` is the newest FINAL day, and nothing after it is in the file. In
+#: version 1 it was `retrievableThrough`, usually today, so the newest rows of a
+#: finished file were partial days that no later run replaced.
+STATE_VERSION = 2
+
+#: How far back from a version-1 file's `end` its rows may be partial. The
+#: archive records days 2 to 3 behind live data, so a 4.0 run that ended on its
+#: `retrievableThrough` wrote two or three days that were not final. A week
+#: covers that with room to spare, and every day re-fetched costs nothing more
+#: than the one request its page already needs.
+V1_UNSETTLED_DAYS = 7
 
 SDK_NAME = "py"
 
@@ -466,7 +500,19 @@ def _read_state(path: Path) -> dict[str, Any]:
 
 
 def _write_state(path: Path, **fields: Any) -> None:
-    path.write_text(json.dumps(fields, sort_keys=True) + "\n", encoding="utf-8")
+    """Replace the state file in one step.
+
+    Written beside it and renamed over it, so a crash or a full disk mid-write
+    leaves the previous state rather than half of a new one. A torn state file
+    reads as no state, and no state beside a file with rows is a refusal.
+    """
+    scratch = path.with_name(path.name + ".writing")
+    try:
+        scratch.write_text(json.dumps(fields, sort_keys=True) + "\n", encoding="utf-8")
+        os.replace(scratch, path)
+    except BaseException:
+        scratch.unlink(missing_ok=True)
+        raise
 
 
 def _state_mismatch(state: dict[str, Any], fmt: str) -> str | None:
@@ -479,12 +525,12 @@ def _state_mismatch(state: dict[str, Any], fmt: str) -> str | None:
     rows and resumed by the JavaScript command produced 172 rows with 64
     duplicated keys and `complete: true`.
     """
-    if state.get("stateVersion") != STATE_VERSION:
-        written = state.get("stateVersion")
-        return f"it was written by a different version of this command (state v{written})"
     if state.get("sdk") != SDK_NAME:
         other = state.get("sdk")
         return f"it was written by the {other} SDK, and resuming across SDKs is not supported"
+    if state.get("stateVersion") != STATE_VERSION:
+        written = state.get("stateVersion")
+        return f"it was written by a different version of this command (state v{written})"
     if state.get("format") != fmt:
         return f"it is a {state.get('format')} run"
     if state.get("columns") != _columns_fingerprint(fmt):
@@ -497,20 +543,37 @@ class _StateFile(NamedTuple):
 
     path: Path
     fmt: str
-    start: Day
+    #: The first day the file was ASKED to start from: `--since`, or where the
+    #: archive starts. Kept apart from the first day actually written, which the
+    #: key's window can push later, so the same `--since` keeps working.
+    since: Day
     end: Day
 
 
-def _record(
-    sf: _StateFile, last_day: date | None, resume_from: str | None, *, complete: bool
-) -> None:
+class _Checkpoint(NamedTuple):
+    """Where a run has got to, as the state file records it."""
+
+    #: The first day actually written to the file. On a first run the key's
+    #: window can push it later than `since`.
+    start: Day
+    last_day: date | str | None
+    resume_from: str | None
+    #: Bytes of the data file this state vouches for. A rerun first cuts the
+    #: file back to exactly this, so nothing written after the checkpoint (a
+    #: half page when the run was killed) can ever be appended twice.
+    size: int
+    complete: bool
+
+
+def _record(sf: _StateFile, cp: _Checkpoint) -> None:
     """Write the state file. `complete` is the fact the old checkpoint could not express.
 
-    `sf.start` is the ORIGINAL start of the range, not the day a resumed run
+    `cp.start` is the ORIGINAL first day of the file, not the day a resumed run
     happened to begin at. The two call sites used to disagree about that, so a
     run interrupted twice recorded the second resume point as though it were the
     beginning and lost the real range.
     """
+    last = cp.last_day
     _write_state(
         sf.path,
         sdk=SDK_NAME,
@@ -520,11 +583,13 @@ def _record(
         columns=_columns_fingerprint(sf.fmt),
         # None, never the string "None". `str(None)` put the literal "None" in
         # the file where the JavaScript SDK writes null, and "None" is truthy.
-        start=_day_str(sf.start),
+        start=_day_str(cp.start),
+        since=_day_str(sf.since),
         end=_day_str(sf.end),
-        lastDay=last_day.isoformat() if last_day else None,
-        resumeFrom=resume_from,
-        complete=complete,
+        lastDay=last.isoformat() if isinstance(last, date) else last,
+        resumeFrom=cp.resume_from,
+        size=cp.size,
+        complete=cp.complete,
     )
 
 
@@ -577,16 +642,104 @@ class _Plan(NamedTuple):
 
     start: Day
     has_rows: bool
+    #: The first day already in the file, or None on a first run.
     prior_start: str | None
     #: True when rows from an EARLIER run are already in the file. Every deletion
     #: in this module has to consult it: `written == 0` means "this process wrote
     #: nothing", which on a resumed run is not the same as "the file is empty".
     resumed: bool = False
+    #: True when a FINISHED file is being carried forward to new final days.
+    extending: bool = False
+    #: The first day the file was asked to start from. See `_StateFile.since`.
+    since: Day = None
+    #: The newest day already in the file, carried into the next checkpoint.
+    prior_last_day: str | None = None
 
 
-def _decide(
-    out_path: Path, state_path: Path, fmt: str, overwrite: bool, archive_from: Day
-) -> _Plan | int:
+def _next_day(value: Day) -> str:
+    """The day after `value`, as YYYY-MM-DD."""
+    return (date.fromisoformat(str(value)) + timedelta(days=1)).isoformat()
+
+
+def _days_before(value: Day, days: int) -> str:
+    return (date.fromisoformat(str(value)) - timedelta(days=days)).isoformat()
+
+
+def _later(a: Day, b: Day) -> Day:
+    """The later of two days, either of which may be None. ISO days sort as text."""
+    if a is None:
+        return b
+    if b is None:
+        return a
+    return a if str(a) >= str(b) else b
+
+
+def _refuse(out_path: Path, why: str) -> int:
+    print(
+        f"  {out_path.name}: {why}.\n"
+        f"    --overwrite   replace it with the range asked for\n"
+        f"    or pass a different --out and run again",
+        file=sys.stderr,
+    )
+    return 1
+
+
+def _range_fits(
+    out_path: Path, state: dict[str, Any], rng: _Range, archive_from: Day, continue_at: str
+) -> int | None:
+    """None when `--since`/`--until` agree with the file being continued, else an exit code.
+
+    A file here is one contiguous range of days, and a run can only append to it,
+    so two requests cannot be honoured without rewriting it: a `--since` before
+    the file's first day, and one after the day it would continue from, which
+    would leave a gap the state file could not describe. Both are refused rather
+    than quietly ignored, which would hand back a file that is not what was asked
+    for.
+
+    THE SAME `--since` IS ALWAYS ACCEPTED, even when it is before the file's first
+    day. On a plan short of the full archive, `--since 2025-01-01` starts the
+    file at the first day the key can read, and a cron line repeating it every
+    night must keep working. So a `--since` is judged against the first day
+    WRITTEN, except that the one the file was asked to start from (`since` in the
+    state) is always fine. A `--since` inside the file is fine and common too: one
+    computed as "30 days ago" moves forward every night. Before the archive
+    starts is the same as its start.
+    """
+    file_start = state.get("start")
+    asked = state.get("since") or file_start
+    since = _later(rng.since, archive_from) if rng.since is not None else None
+    if (
+        since is not None
+        and file_start is not None
+        and str(since) < str(file_start)
+        and str(since) != str(asked)
+    ):
+        return _refuse(
+            out_path,
+            f"it was started from {file_start}, and --since {rng.since} would need days "
+            f"before that. Appending cannot add them",
+        )
+    if rng.until is not None and file_start is not None and rng.until < str(file_start):
+        return _refuse(out_path, f"it was started from {file_start}, after --until {rng.until}")
+    if since is not None and str(since) > continue_at:
+        return _refuse(
+            out_path,
+            f"it continues from {continue_at}, so starting at --since {rng.since} would "
+            f"leave a gap",
+        )
+    return None
+
+
+class _Ask(NamedTuple):
+    """The range a run is asked for: where the archive starts, the newest day
+    to fetch, and `--since`/`--until`."""
+
+    archive_from: Day
+    end: Day
+    rng: _Range
+
+
+def _decide(out_path: Path, state_path: Path, fmt: str, overwrite: bool, ask: _Ask) -> _Plan | int:
     """A `_Plan` to proceed with, or an exit code meaning "do not".
 
     Split out of `backfill_park` because it got long enough for ruff to object,
@@ -594,23 +747,31 @@ def _decide(
     writing. Every branch here exists for a defect measured in review -- see the
     STATE block above for the five of them.
     """
+    if ask.end is None:
+        # Nothing is final: a park the archive has not recorded a day of yet.
+        # Nothing is touched, so an existing file and its state stay as they are.
+        print(
+            f"  nothing final to fetch into {out_path.name} yet. The archive records "
+            f"days 2 to 3 behind live data; run again later",
+            file=sys.stderr,
+        )
+        return 0
+
     state = {} if overwrite else _read_state(state_path)
     if overwrite:
         out_path.unlink(missing_ok=True)
         state_path.unlink(missing_ok=True)
 
     file_exists = out_path.exists() and out_path.stat().st_size > 0
-    mismatch = _state_mismatch(state, fmt) if state else None
-    resumable = bool(state) and mismatch is None
 
-    # Finished already. Say so and stop, rather than appending a second copy.
-    if state.get("complete") and resumable and file_exists:
-        print(
-            f"  already complete: {state.get('start')} .. {state.get('end')} "
-            f"in {out_path.name} — pass --overwrite to fetch it again",
-            file=sys.stderr,
-        )
-        return 0
+    # A state file describing a data file that is no longer there. Continuing
+    # would write a file that starts part-way through its range and then record
+    # it as complete. There is nothing to continue, so start again.
+    if state and not file_exists:
+        state = {}
+
+    if state and _upgradable(state, fmt):
+        state = _upgrade_v1(state, out_path, state_path, fmt)
 
     # A file we have no record of writing. Refusing is the only safe answer:
     # appending doubles it, truncating throws away someone's data.
@@ -623,12 +784,19 @@ def _decide(
         )
         return 1
 
-    # A state file this build cannot resume. Refusing is the only safe answer: the
-    # file beside it was written to a different contract, and appending to it
+    # A state file this build cannot continue. Refusing is the only safe answer:
+    # the file beside it was written to a different contract, and appending to it
     # produces a file no reader can parse -- or worse, one that parses wrongly.
-    if state and mismatch is not None and not state.get("complete"):
+    #
+    # FINISHED OR NOT. Only an unfinished one used to be refused: a finished one
+    # fell through to a fresh start, and a fresh start opens the existing file in
+    # append mode, so the whole archive went in a second time under a second
+    # header, exit 0. A finished file is continued now, so it is refused too.
+    mismatch = _state_mismatch(state, fmt) if state else None
+    if mismatch is not None:
+        kind = "a finished" if state.get("complete") else "an unfinished"
         print(
-            f"  there is an unfinished {out_path.name} beside this state file, but "
+            f"  there is {kind} {out_path.name} beside this state file, but "
             f"{mismatch}.\n"
             f"    --overwrite   start this park again from the beginning\n"
             f"    or move both files aside and run again",
@@ -636,25 +804,285 @@ def _decide(
         )
         return 1
 
-    resuming = resumable and not state.get("complete")
-    # THE PAGE BOUNDARY, not the newest row. `last_day` is the highest date
+    if state:
+        checked = _back_to_checkpoint(out_path, state_path, state)
+        if isinstance(checked, int):
+            return checked
+        state = checked
+    if not state:
+        return _first_run(out_path, ask)
+    return _continue(out_path, state, ask)
+
+
+def _back_to_checkpoint(
+    out_path: Path, state_path: Path, state: dict[str, Any]
+) -> dict[str, Any] | int:
+    """Cut the file back to what the state vouches for: the checkpoint's `size`.
+
+    THIS IS WHAT MAKES A RERUN IDEMPOTENT. The state used to be written only at
+    the end of a run or on an error the SDK raised, so Ctrl-C, SIGTERM or
+    SIGKILL during a nightly extension left `complete: true` with the old end,
+    and the rerun appended the same days again: 70 duplicate rows, exit 0. The
+    state is now written after every page with the file's size at that moment,
+    so whatever is past that size was written after the last checkpoint -- half a
+    page, or a torn line -- and is discarded here, then fetched again.
+
+    A file SHORTER than its checkpoint was changed by something else, and
+    appending would leave a hole the state claims is filled, so it is refused.
+
+    A state with no `size` predates it. Its file is cut back by date instead, to
+    the day it continues from, which reads the file once and then records a size.
+    Returns the state to go on with; an empty dict when nothing is left in the
+    file, which is a first run.
+    """
+    actual = out_path.stat().st_size
+    size = state.get("size")
+    if not isinstance(size, int):
+        keep_through = _legacy_keep_through(state)
+        fmt = str(state.get("format"))
+        if keep_through is not None and _trim_after(out_path, fmt, keep_through) == 0:
+            out_path.unlink(missing_ok=True)
+            state_path.unlink(missing_ok=True)
+            return {}
+        if keep_through is not None and not state.get("complete"):
+            state = {**state, "resumeFrom": _next_day(keep_through)}
+        state = {**state, "size": out_path.stat().st_size}
+        _write_state(state_path, **state)
+        return state
+    if actual < size:
+        return _refuse(
+            out_path,
+            f"it is {actual} bytes, shorter than the {size} its state file records, so "
+            f"something other than this command changed it",
+        )
+    if actual > size:
+        print(
+            f"  discarding the last {actual - size} bytes of {out_path.name}: written "
+            f"after the last checkpoint, and fetched again now",
+            file=sys.stderr,
+        )
+        with out_path.open("r+b") as handle:
+            handle.truncate(size)
+    if size == 0:
+        # Nothing survived the cut: this is a first run, from the range asked.
+        state_path.unlink(missing_ok=True)
+        return {}
+    return state
+
+
+def _legacy_keep_through(state: dict[str, Any]) -> str | None:
+    """For a state without `size`: the newest day its file can be trusted to hold.
+
+    A finished file holds every day through `end`. An unfinished one holds every
+    day before `resumeFrom`, the page boundary; rows from that day on were
+    written after it, by a run that was then killed. Without a boundary there is
+    only `lastDay`, the newest day ANY entity reached -- and rows arrive entity by
+    entity, so another entity may have stopped days earlier. The page that run
+    was on began at most 30 days before `lastDay` (a page is up to 31 days), so
+    that is where it is safe to go back to. Resuming at `lastDay` itself, as
+    before, lost the later entities' days for good.
+    """
+    if state.get("complete"):
+        end = state.get("end")
+        return str(end) if end else None
+    resume = state.get("resumeFrom")
+    if resume:
+        return _days_before(resume, 1)
+    last_day = state.get("lastDay")
+    start = state.get("start")
+    if last_day:
+        # No earlier than the file's own first day: nothing before it exists.
+        back = _days_before(last_day, PAGE_DAYS)
+        return back if not start or back >= _days_before(start, 1) else _days_before(start, 1)
+    return _days_before(start, 1) if start else None
+
+
+#: The most park-local days one page of the park daily endpoint covers.
+PAGE_DAYS = 31
+
+
+def _first_run(out_path: Path, ask: _Ask) -> _Plan | int:
+    """A park with no file yet: from `--since`, or wherever the archive starts."""
+    rng = ask.rng
+    start = _later(rng.since, ask.archive_from) if rng.since is not None else ask.archive_from
+    if rng.since is not None and str(start) > str(ask.end):
+        print(
+            f"  nothing to fetch into {out_path.name}: --since {rng.since} is after "
+            f"{ask.end}, the newest final day",
+            file=sys.stderr,
+        )
+        return 0
+    return _Plan(start=start, has_rows=False, prior_start=None, since=start)
+
+
+def _continue(out_path: Path, state: dict[str, Any], ask: _Ask) -> _Plan | int:
+    """A file this command wrote: carry it forward, or say why not."""
+    rng, archive_from, end = ask.rng, ask.archive_from, ask.end
+    carried = _Plan(
+        start=None,
+        has_rows=True,
+        prior_start=state.get("start"),
+        resumed=True,
+        since=state.get("since") or state.get("start"),
+        prior_last_day=state.get("lastDay"),
+    )
+    if state.get("complete"):
+        # FINISHED IS NOT FOREVER. It used to be: a rerun printed "already
+        # complete" and exited 0 without asking for a single new day, so a
+        # nightly cron looked healthy and never updated. The file holds every
+        # day through `end`, so the next day is where it carries on.
+        recorded_end = state.get("end")
+        continue_at = _next_day(recorded_end) if recorded_end else str(state.get("start"))
+        refused = _range_fits(out_path, state, rng, archive_from, continue_at)
+        if refused is not None:
+            return refused
+        if end is None or continue_at > str(end):
+            print(
+                f"  up to date: {out_path.name} is complete through {recorded_end}, "
+                f"and there is no final day after it yet",
+                file=sys.stderr,
+            )
+            return 0
+        return carried._replace(start=continue_at, extending=True)
+
+    # THE PAGE BOUNDARY, not the newest row. `lastDay` is the highest date
     # written; the page it came from covered further, because an entity that
     # stopped reporting has no rows for the tail days. Resuming at `last_day`
-    # re-fetches a day already in the file and appends every row of it again --
-    # on the exit-75 path, which is the ordinary path for a long back fill, and
-    # it breaks the (entityId, date) key the file is documented to have.
-    #
-    # `last_day` stays as the fallback for the two cases with no boundary
-    # recorded: a state file written by 3.3.0, and a run that died part-way
-    # through its FIRST page. One duplicated day beats starting from the top and
-    # appending a second copy of the whole archive.
-    resume_at = (state.get("resumeFrom") or state.get("lastDay")) if resuming else None
-    return _Plan(
-        start=resume_at or archive_from,
-        has_rows=file_exists and resuming,
-        prior_start=state.get("start") if resuming else None,
-        resumed=resuming,
+    # re-fetches a day already in the file and appends every row of it again.
+    # Every state this build writes has a boundary; `_back_to_checkpoint` gives
+    # one to an older state that did not.
+    resume_at = state.get("resumeFrom") or state.get("lastDay")
+    continue_at = str(resume_at or state.get("start") or archive_from)
+    refused = _range_fits(out_path, state, rng, archive_from, continue_at)
+    if refused is not None:
+        return refused
+    if rng.until is not None and continue_at > str(end):
+        print(
+            f"  nothing to add: {out_path.name} continues from {continue_at}, after "
+            f"--until {rng.until}",
+            file=sys.stderr,
+        )
+        return 0
+    return carried._replace(start=continue_at)
+
+
+# --------------------------------------------------------------------------
+# Files written by 4.0.x, whose newest rows may be partial days.
+# --------------------------------------------------------------------------
+
+
+def _upgradable(state: dict[str, Any], fmt: str) -> bool:
+    """A version-1 state file from this SDK, for this format and column layout."""
+    return (
+        state.get("stateVersion") == 1
+        and state.get("sdk") == SDK_NAME
+        and state.get("format") == fmt
+        and state.get("columns") == _columns_fingerprint(fmt)
     )
+
+
+def _upgrade_v1(
+    state: dict[str, Any], out_path: Path, state_path: Path, fmt: str
+) -> dict[str, Any]:
+    """Make a 4.0 file one this build can continue, replacing its unsettled tail.
+
+    4.0 ended every run at `retrievableThrough`, usually today, so the last few
+    days of a finished 4.0 file were written while they were still changing:
+    Magic Kingdom's last day summed to about half the operating minutes of a
+    full one. Nothing ever replaced them, because a finished park was never
+    fetched again.
+
+    Which of those days were final at the time was not recorded, so every row
+    dated within `V1_UNSETTLED_DAYS` of that run's end is removed and the state
+    is set to carry on from the day after the cut. The next request then fetches
+    those days again, final this time. A file whose newest row is already older
+    than the cut, a park that stopped reporting long ago, is not read at all.
+
+    A file that lies WHOLLY inside the cut, as every anonymous 7-day file does,
+    is downloaded again instead: the cut leaves it empty, its checkpoint says 0
+    bytes, and `_back_to_checkpoint` treats that as a first run. Continued, it
+    would carry on from a day the key may no longer read, which a continued file
+    is not allowed to skip past.
+
+    The new state is written straight away, so a run that fails after this
+    point does not trim the same file twice.
+    """
+    end = state.get("end")
+    upgraded = {**state, "stateVersion": STATE_VERSION}
+    if not end:
+        return upgraded
+    keep_through = _days_before(end, V1_UNSETTLED_DAYS)
+    last_day = state.get("lastDay")
+    trimmed = last_day is None or str(last_day) > keep_through
+    if trimmed:
+        _trim_after(out_path, fmt, keep_through)
+        upgraded["lastDay"] = keep_through if last_day is not None else None
+    if state.get("complete"):
+        upgraded["end"] = keep_through
+    else:
+        resume = state.get("resumeFrom") or last_day
+        if resume is None or str(resume) > _next_day(keep_through):
+            upgraded["resumeFrom"] = _next_day(keep_through)
+    if trimmed or state.get("complete"):
+        # Nothing past the cut is left, so the whole file is vouched for.
+        upgraded["size"] = out_path.stat().st_size
+    _write_state(state_path, **upgraded)
+    return upgraded
+
+
+def _trim_after(out_path: Path, fmt: str, keep_through: str) -> int:
+    """Remove every row dated after `keep_through`, leaving the rest byte for byte.
+
+    Returns how many rows were kept, counting any it could not read.
+
+    Streamed into a file beside the original and swapped in with one rename, so
+    an interruption leaves either the old file or the new one, never half of
+    each, and the half-written copy is removed. A line or record that cannot be
+    read is kept: this command does not get to decide that something it does not
+    understand is worthless.
+
+    The CSV is parsed and written back with this module's own quoting, which is
+    a function of the text alone, so a kept record comes out as it went in.
+    """
+    scratch = out_path.with_name(out_path.name + ".trimming")
+    try:
+        with out_path.open(encoding="utf-8", newline="") as src:
+            kept = _copy_rows_through(src, scratch, fmt, keep_through)
+        os.replace(scratch, out_path)
+    except BaseException:
+        scratch.unlink(missing_ok=True)
+        raise
+    return kept
+
+
+def _copy_rows_through(src: TextIO, scratch: Path, fmt: str, keep_through: str) -> int:
+    """The body of `_trim_after`: copy every row dated on or before `keep_through`."""
+    kept = 0
+    with scratch.open("w", encoding="utf-8", newline="") as dst:
+        if fmt == "csv":
+            reader = csv.reader(src)
+            header = next(reader, None)
+            if header is not None:
+                dst.write(",".join(_csv_cell(cell) for cell in header) + "\n")
+                names = [cell.lstrip("\ufeff") for cell in header]
+                # No `date` column: not a file this can read, so it is copied whole.
+                column = names.index("date") if "date" in names else -1
+                for record in reader:
+                    if 0 <= column < len(record) and record[column] > keep_through:
+                        continue
+                    kept += 1
+                    dst.write(",".join(_csv_cell(cell) for cell in record) + "\n")
+        else:
+            for line in src:
+                try:
+                    day = json.loads(line).get("date")
+                except (ValueError, AttributeError):
+                    day = None
+                if isinstance(day, str) and day > keep_through:
+                    continue
+                kept += 1
+                dst.write(line)
+    return kept
 
 
 class _Job(NamedTuple):
@@ -666,6 +1094,10 @@ class _Job(NamedTuple):
     end: Day
     has_rows: bool
     ident: _RowIdentity
+    #: Where every checkpoint is written.
+    state: _StateFile
+    #: True when the file is being CONTINUED, so its next day is fixed.
+    resumed: bool = False
 
 
 class _Progress:
@@ -679,11 +1111,26 @@ class _Progress:
     Owned by the caller, updated in place, so it is readable after a raise.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, file_start: Day = None, last_day: str | None = None) -> None:
         self.written = 0
-        self.last_day: date | None = None
+        self.last_day: date | str | None = last_day
         self.resume_from: str | None = None
         self.skipped = False
+        #: The key cannot read the day a continued file carries on from.
+        self.out_of_reach = False
+        #: The first day in the file: the prior run's on a continued file, the
+        #: first day this run actually requested successfully on a new one.
+        self.file_start: Day = file_start
+
+    def checkpoint(self, sf: _StateFile, size: int, resume_from: str | None) -> None:
+        """Record that the first `size` bytes of the file are good through here."""
+        _record(sf, _Checkpoint(self.file_start, self.last_day, resume_from, size, False))
+
+
+def _size(handle: TextIO) -> int:
+    """Bytes written so far, after pushing Python's buffer to the OS."""
+    handle.flush()
+    return os.fstat(handle.fileno()).st_size
 
 
 def _stream(job: _Job, start: Day, progress: _Progress) -> None:
@@ -692,34 +1139,51 @@ def _stream(job: _Job, start: Day, progress: _Progress) -> None:
     Separated from `backfill_park` because that function was deciding, printing,
     streaming and recording in one place, and ruff counted the statements before
     a reader had to. This is the streaming.
+
+    THE STATE IS WRITTEN BEFORE THE FIRST REQUEST AND AFTER EVERY PAGE, with the
+    file's size at that moment. Nothing else has to run for it to be right: a
+    run stopped by Ctrl-C, SIGTERM or SIGKILL leaves a state that names the last
+    page boundary, and the rerun cuts the file back to it. An extending run
+    marks the file unfinished before it appends its first row, so no rerun can
+    mistake a half-extended file for a finished one.
     """
+    handle: TextIO
 
     def note_page(page: HistoryPage) -> None:
         """Checkpoint, called once every row of a page is written.
 
         The day the NEXT page starts on, taken from the server's own `next` URL,
         so a resumed run asks for nothing twice. None on the last page, where
-        there is nothing left to carry on from.
+        there is nothing left to carry on from; completion is recorded by the
+        caller once the file is closed.
         """
         progress.resume_from = _next_page_start(page.next_url)
+        if progress.resume_from is not None:
+            progress.checkpoint(job.state, _size(handle), progress.resume_from)
 
     def write_rows(writer: Writer, first_day: Day) -> None:
         """Stream one range into the file. Raises whatever the SDK raises."""
         for ref, row in job.history.days_with_entities(first_day, job.end, on_page=note_page):
+            if progress.written == 0 and progress.file_start is None:
+                # The first row of a new file: this range was not refused, so its
+                # first day is the file's, whatever `--since` asked for.
+                progress.file_start = first_day
             writer.write(ref, row)
             progress.written += 1
             # MAX, not last-seen. `_daily_rows` walks entities and then each
             # entity's days, so the final row belongs to the alphabetically last
-            # entity, which may have stopped reporting mid-page. Taking it as the
-            # high-water mark could rewind the resume point by up to a whole
-            # 31-day page, while the module claimed the overlap was "one day".
+            # entity, which may have stopped reporting mid-page.
+            previous = progress.last_day
             progress.last_day = (
-                row.date if progress.last_day is None else max(progress.last_day, row.date)
+                row.date if previous is None else max(date.fromisoformat(str(previous)), row.date)
             )
             if progress.written % 5000 == 0:
                 print(f"  {progress.written} rows, at {progress.last_day}", file=sys.stderr)
 
     with job.out_path.open("a", newline="", encoding="utf-8") as handle:
+        # Before the first request: from here on the file may grow, so the state
+        # must say where it was good up to.
+        progress.checkpoint(job.state, _size(handle), None if start is None else str(start))
         # ONE Writer for the whole park, so the header decision is made once. It
         # used to be built inside write_rows with `written == 0` in the predicate,
         # and the recovery below calls that again precisely when written is 0 --
@@ -734,6 +1198,25 @@ def _stream(job: _Job, start: Day, progress: _Progress) -> None:
             # boundary, and restarting would duplicate rows.
             if floor is None or progress.written:
                 raise
+            # A FILE BEING CONTINUED CANNOT JUMP FORWARD. Starting at the key's
+            # first day instead of the day the file continues from leaves a gap
+            # the state file cannot describe, so the file would claim days it
+            # does not hold. It happens when a cron has not run for longer than
+            # the key's window, or the key lost its plan. Refused, file untouched.
+            if job.resumed:
+                if start is None or floor <= str(start):
+                    raise
+                print(
+                    f"  this key reaches back to {floor}, but {job.out_path.name} "
+                    f"continues from {start}: the days between are out of reach, and "
+                    f"carrying on from {floor} would leave a gap in the file. The rows "
+                    f"already downloaded are left alone.\n"
+                    f"    --overwrite   start the file again from what this key can read\n"
+                    f"    or pass a different --out and run again",
+                    file=sys.stderr,
+                )
+                progress.out_of_reach = True
+                return
             print(
                 f"  this key reaches back to {floor}, not {start} — starting there",
                 file=sys.stderr,
@@ -771,26 +1254,114 @@ def _window_closed(out_path: Path, end: Day, start: Day, *, resumed: bool) -> in
 
 
 def _nothing_written(
-    out_path: Path, state_path: Path, sf: _StateFile, progress: _Progress, *, resumed: bool
+    out_path: Path, state_path: Path, progress: _Progress, *, resumed: bool
 ) -> int:
     """The park had nothing in this key's window. Tidy up, or refuse to.
 
     On a first run both files go: an empty file reads as "this park has no
     history". On a RESUMED run an earlier run's rows are real and are not ours to
     remove, so the state is kept and the exit code says the run did not finish.
+
+    A continued file the key can no longer reach the next day of is refused
+    outright: nothing written and the state untouched, so the next run meets the
+    same refusal until someone decides, rather than carrying on with a gap.
     """
-    if resumed:
-        _record(sf, progress.last_day, progress.resume_from, complete=False)
+    if progress.out_of_reach or resumed:
+        # The checkpoint written before the first request already says where
+        # the file continues from.
         return 1
     out_path.unlink(missing_ok=True)
     state_path.unlink(missing_ok=True)
     return 0
 
 
-def backfill_park(
-    tp: ThemeParks, park: _Park, out_dir: Path, fmt: str, overwrite: bool = False
+@contextlib.contextmanager
+def _park_lock(out_dir: Path, park_id: str, fmt: str) -> Iterator[bool]:
+    """Hold an advisory lock on one park's output, yielding whether it was got.
+
+    Two runs on the same park and `--out`, say a cron overlapping a manual run,
+    would each read the same state and append the same days. The lock is a
+    separate file because the state and data files are replaced by rename, and a
+    lock on a replaced file protects nothing. The operating system releases it
+    when the process ends, however it ends, so a killed run never leaves a stale
+    lock behind. Where `fcntl` does not exist (Windows) this does not lock.
+    """
+    try:
+        import fcntl  # noqa: PLC0415 - POSIX only; absent on Windows
+    except ImportError:  # pragma: no cover - exercised on Windows only
+        yield True
+        return
+    path = out_dir / f".{park_id}.{fmt}.backfill-lock"
+    with path.open("a") as handle:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _run_end(span: HistorySpan, rng: _Range) -> Day:
+    """The last day this run asks for: the newest FINAL day, or `--until` if earlier.
+
+    Not `retrievable_through`. That is usually today, and today's row is the day
+    so far; the archive records days 2 to 3 behind, so the days in between can
+    still change too. Ending there wrote partial rows -- Magic Kingdom's last day
+    at about half a full day's operating minutes -- and, since a finished park
+    was never fetched again, they stayed partial.
+    """
+    end: Day = span.final_through
+    if rng.until is not None and end is not None and rng.until < str(end):
+        end = rng.until
+    return end
+
+
+def _announce(park_id: str, plan: _Plan, ask: _Ask, span: HistorySpan, out_path: Path) -> None:
+    """Say what this run will fetch, and why it stops where it does."""
+    note = " (new days)" if plan.extending else " (resumed)" if plan.resumed else ""
+    print(f"{park_id}: {plan.start} .. {ask.end}{note} -> {out_path}", file=sys.stderr)
+    through = span.retrievable_through
+    if through is not None and str(through) > str(ask.end) and ask.end == span.final_through:
+        print(
+            f"  stopping at {ask.end}: the days after it are still being recorded and "
+            f"can change. The next run adds them once they are final",
+            file=sys.stderr,
+        )
+
+
+def backfill_park(  # noqa: PLR0913 - window is keyword-only, added without breaking callers
+    tp: ThemeParks,
+    park: _Park,
+    out_dir: Path,
+    fmt: str,
+    overwrite: bool = False,
+    *,
+    window: _Range | None = None,
 ) -> int:
-    """Write one park's daily history. Returns 0, or EX_TEMPFAIL if the budget ran out."""
+    """Write one park's daily history. Returns 0, or EX_TEMPFAIL if the budget ran out.
+
+    `window` is `--since`/`--until`. Without it the range is everything the key
+    may read, through the newest final day.
+    """
+    with _park_lock(out_dir, park.id, fmt) as held:
+        if not held:
+            print(
+                f"{park.id}: another themeparks-backfill is writing this park into "
+                f"{out_dir} right now. Two at once would each append the same days; "
+                f"wait for it to finish",
+                file=sys.stderr,
+            )
+            return 1
+        return _backfill_park(tp, park, out_dir, fmt, overwrite=overwrite, rng=window or _Range())
+
+
+def _backfill_park(  # noqa: PLR0913 - the arguments of backfill_park, resolved
+    tp: ThemeParks, park: _Park, out_dir: Path, fmt: str, *, overwrite: bool, rng: _Range
+) -> int:
+    """`backfill_park`, once this process holds the park's lock."""
     park_id = park.id
     history = tp.entity(park_id).history
 
@@ -821,36 +1392,32 @@ def backfill_park(
     ext = "csv" if fmt == "csv" else "ndjson"
     out_path = out_dir / f"{park_id}.{ext}"
     state_path = state_path_for(out_dir, park_id, fmt)
-    end = span.retrievable_through
-
-    decided = _decide(out_path, state_path, fmt, overwrite, span.archive_from)
+    ask = _Ask(span.archive_from, _run_end(span, rng), rng)
+    decided = _decide(out_path, state_path, fmt, overwrite, ask)
     if isinstance(decided, int):
         return decided
-    start, has_rows, prior_start, resumed_run = decided
-    resuming = prior_start is not None
-    sf = _StateFile(state_path, fmt, prior_start or start, end)
-
-    print(
-        f"{park_id}: {start} .. {end}{' (resumed)' if resuming else ''} -> {out_path}",
-        file=sys.stderr,
-    )
+    start, has_rows, prior_start, resumed_run = decided[:4]
+    end = ask.end
+    sf = _StateFile(state_path, fmt, decided.since, end)
+    _announce(park_id, decided, ask, span, out_path)
 
     if _is_empty_window(start, end):
         return _window_closed(out_path, end, start, resumed=resumed_run)
 
     ident = _RowIdentity(park)
-    job = _Job(history, out_path, fmt, end, has_rows, ident)
-    progress = _Progress()
+    job = _Job(history, out_path, fmt, end, has_rows, ident, sf, resumed=resumed_run)
+    progress = _Progress(prior_start, decided.prior_last_day)
     try:
         _stream(job, start, progress)
     except BudgetExhaustedError as exc:
         # The budget is hourly, so a spent one can be most of an hour from
-        # resetting. Record how far we got and exit 75 rather than sleeping.
-        _record(sf, progress.last_day, progress.resume_from, complete=False)
+        # resetting. Exit 75 rather than sleeping; the last checkpoint already
+        # says where to carry on.
         if progress.written == 0 and not resumed_run:
             # A budget spent before the first page left a 0-byte file that reads
             # as "this park has no history".
             out_path.unlink(missing_ok=True)
+            state_path.unlink(missing_ok=True)
         wait = exc.retry_after or 0
         print(
             f"  budget spent; rerun the same command in {wait / 60:.0f} min to continue",
@@ -862,14 +1429,13 @@ def backfill_park(
     # turns exit 75 into a traceback and exit 1 -- the precise regression the
     # budget handler exists to prevent.
     except (ThemeParksError, OSError):
-        # Every other failure still records where it got to, or the next run
-        # starts over and appends a second partial copy. And AN EMPTY FILE IS A
-        # LIE: opening the file created it before the first request, so a park
-        # that failed with nothing written left a 0-byte file that reads as
-        # "this park has no history" -- on a six-park destination the customer
-        # counts six files and never sees which one is empty.
-        if progress.last_day is not None:
-            _record(sf, progress.last_day, progress.resume_from, complete=False)
+        # The last checkpoint already says where to carry on, and the rerun cuts
+        # off anything written after it. AN EMPTY FILE IS A LIE: opening the file
+        # created it before the first request, so a park that failed with nothing
+        # written left a 0-byte file that reads as "this park has no history" --
+        # on a six-park destination the customer counts six files and never sees
+        # which one is empty.
+        #
         # `written` counts rows THIS process wrote, so on a resumed run it is 0
         # while the file holds everything the previous runs fetched. Deleting it
         # there destroyed the archive and left the state file pointing into the
@@ -877,14 +1443,16 @@ def backfill_park(
         # `complete: true`.
         if progress.written == 0 and not resumed_run:
             out_path.unlink(missing_ok=True)
+            state_path.unlink(missing_ok=True)
         raise
 
-    if progress.skipped and progress.written == 0:
-        return _nothing_written(out_path, state_path, sf, progress, resumed=resumed_run)
+    if progress.out_of_reach or (progress.skipped and progress.written == 0):
+        return _nothing_written(out_path, state_path, progress, resumed=resumed_run)
 
     # Completion is RECORDED, never inferred from a missing file. That is the
     # distinction the old checkpoint could not make.
-    _record(sf, progress.last_day, None, complete=True)
+    size = out_path.stat().st_size
+    _record(sf, _Checkpoint(progress.file_start, progress.last_day, None, size, True))
     print(f"  done: {progress.written} rows -> {out_path}", file=sys.stderr)
     return 0
 
@@ -1089,6 +1657,25 @@ def _print_list(catalogue: list[tuple[str, str, str, str]], needle: str | None) 
     return 0
 
 
+_ISO_DAY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _iso_day(value: str) -> str:
+    """An argparse type: a real calendar day written YYYY-MM-DD, returned as given.
+
+    Strict on purpose. From 3.11 `date.fromisoformat` also takes `20250101` and
+    week dates, and 3.9 does not, so the same command line would mean something
+    on one interpreter and fail on another. Only the form the API itself uses is
+    accepted, everywhere.
+    """
+    try:
+        if _ISO_DAY.match(value):
+            return date.fromisoformat(value).isoformat()
+    except ValueError:
+        pass
+    raise argparse.ArgumentTypeError(f"expected a day as YYYY-MM-DD, got {value!r}")
+
+
 EPILOG = """examples:
   export THEMEPARKS_API_KEY=tpw_your_key
       how far back this reaches is your plan, so without a key you get the 7
@@ -1110,6 +1697,34 @@ EPILOG = """examples:
 
   themeparks-backfill <id-a> <id-b> <id-c>
       several parks in one run, sharing one connection and one budget
+
+  themeparks-backfill "Epcot" --since 2025-01-01
+      from a day of your choosing instead of as far back as your plan reaches.
+      --until YYYY-MM-DD sets the last day. Both are inclusive.
+
+  themeparks-backfill "Epcot"     (again, from cron, every night)
+      adds the days that became final since the last run, and nothing else.
+
+only final days are written. Today's row is the day so far, and the archive
+records days 2 to 3 behind live data, so the newest days can still change. A run
+ends at the newest final day and the next run carries on from the day after, so
+the file only ever grows. Each day is fetched once, as the archive recorded it;
+if the archive later re-records past days (a repaired feed), fetch them again
+with --since/--until into a different --out, or start again with --overwrite.
+
+stopping is safe at any point: the state is saved after every page, and the next
+run cuts off anything written after it, so no day is appended twice.
+
+--since applies when a file is started. A later run continues that file forward
+and accepts the same --since, or a later one. One earlier than the file's first
+day, or past the day it continues from, is refused: use --overwrite, or a
+different --out. A --since before your plan's window starts the file at the
+first day your key can read, and the same --since keeps working on every later
+run.
+
+a file is never continued past a gap. If the day it continues from is older than
+your key can read (a cron that missed more days than your window, or a plan that
+lapsed), the run is refused and the file left alone.
 
 exit codes:
   0   done
@@ -1161,8 +1776,20 @@ def main(argv: list[str] | None = None) -> int:
         "--overwrite",
         action="store_true",
         help="replace an existing file instead of refusing. Without it, a park"
-        " that finished is not fetched twice and a file this command did not"
-        " write is never touched.",
+        " that finished is brought up to date rather than fetched twice, and a"
+        " file this command did not write is never touched.",
+    )
+    parser.add_argument(
+        "--since",
+        type=_iso_day,
+        metavar="YYYY-MM-DD",
+        help="first day to download, inclusive (default: as far back as your plan reaches)",
+    )
+    parser.add_argument(
+        "--until",
+        type=_iso_day,
+        metavar="YYYY-MM-DD",
+        help="last day to download, inclusive (default: the newest final day)",
     )
     parser.add_argument(
         "--version",
@@ -1178,6 +1805,8 @@ def main(argv: list[str] | None = None) -> int:
         help="output directory (default: .)",
     )
     args = parser.parse_args(argv)
+    if args.since is not None and args.until is not None and args.since > args.until:
+        parser.error(f"--since {args.since} is after --until {args.until}")
 
     _use_utf8(sys.stdout, sys.stderr)
 
@@ -1198,7 +1827,9 @@ def main(argv: list[str] | None = None) -> int:
     # whether to pay is exactly the person who should be able to run this.
     if not args.api_key:
         print(
-            "no API key: reading the 7 days anonymous access allows.\n"
+            "no API key: reading the 7 days anonymous access allows. Only final days\n"
+            "  are written, and the newest 2 to 3 are still being recorded, so that\n"
+            "  is usually 4 or 5 days per park.\n"
             "  a free key reads 30 days, Pro 400, Business the whole archive\n"
             "  set THEMEPARKS_API_KEY, or pass --api-key\n"
             "  keys: https://www.themeparks.wiki/profile\n",
@@ -1260,7 +1891,8 @@ def main(argv: list[str] | None = None) -> int:
         # success. They paid for 400 days and got seven, exit 0, no complaint.
         if not args.api_key:
             print(
-                "\nthat was ANONYMOUS ACCESS: the last 7 days only.\n"
+                "\nthat was ANONYMOUS ACCESS: the final days among the last 7 days only,\n"
+                "  usually 4 or 5 per park.\n"
                 "  a free key reads 30 days, Pro 400, Business the whole archive\n"
                 "  set THEMEPARKS_API_KEY and run the same command again\n"
                 "  keys: https://www.themeparks.wiki/profile",
@@ -1280,9 +1912,12 @@ def _run_all(tp: ThemeParks, targets: list[tuple[str, str]], args: Any) -> int:
     code still says something went wrong.
     """
     failed: list[str] = []
+    window = _Range(getattr(args, "since", None), getattr(args, "until", None))
     for park_id, pname in targets:
         try:
-            status = backfill_park(tp, _Park(park_id, pname), args.out, args.format, args.overwrite)
+            status = backfill_park(
+                tp, _Park(park_id, pname), args.out, args.format, args.overwrite, window=window
+            )
         except (ThemeParksError, OSError) as exc:
             print(f"{park_id}: {exc}", file=sys.stderr)
             failed.append(pname)
@@ -1311,11 +1946,19 @@ def cli() -> int:
     these are bugs in it, and a customer who has just paid reads one as the tool
     being broken.
     """
+    previous = _stop_on_sigterm()
     try:
         return main()
-    except KeyboardInterrupt:
-        print("\nstopped. Run the same command again to continue.", file=sys.stderr)
-        return 130
+    except KeyboardInterrupt as exc:
+        # Nothing to save here. The state file was written after the last whole
+        # page, and the next run cuts off anything written since, so stopping at
+        # any point costs at most the page in flight.
+        print(
+            "\nstopped. Everything through the last whole page is saved; run the "
+            "same command again to continue.",
+            file=sys.stderr,
+        )
+        return 143 if isinstance(exc, _Terminated) else 130
     except (NetworkError, ApiTimeoutError) as exc:
         # A connection reset or a timeout IS resumable, so this is EX_TEMPFAIL and a
         # scheduler retries rather than alerting. The JavaScript SDK said 75 here
@@ -1338,6 +1981,32 @@ def cli() -> int:
         # a few hundred MB, so this is not hypothetical.
         print(f"cannot write the output: {exc}", file=sys.stderr)
         return 1
+    finally:
+        if previous is not None:
+            signal.signal(signal.SIGTERM, previous)
+
+
+class _Terminated(KeyboardInterrupt):
+    """SIGTERM, raised where the process is, so it unwinds like Ctrl-C.
+
+    The default SIGTERM action ends the process without running any `finally`
+    or `with` exit: the output file is not closed and nothing says what
+    happened. A scheduler stopping a run (systemd, a container shutdown) sends
+    exactly this, so it gets the same orderly stop and message as Ctrl-C, and
+    exit 143, the conventional code for it.
+    """
+
+
+def _stop_on_sigterm() -> Any:
+    """Turn SIGTERM into `_Terminated` for this process. Returns the old handler."""
+
+    def handler(_signum: int, _frame: Any) -> None:
+        raise _Terminated
+
+    try:
+        return signal.signal(signal.SIGTERM, handler)
+    except ValueError:  # pragma: no cover - not the main thread
+        return None
 
 
 if __name__ == "__main__":

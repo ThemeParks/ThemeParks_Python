@@ -2,8 +2,10 @@ from themeparks._cache import Cache, CacheConfig, InMemoryLRUCache
 from themeparks._client import AsyncThemeParks, ThemeParks
 from themeparks._ergonomic.dates import parse_api_datetime
 from themeparks._ergonomic.history import (
+    AsyncHistoryChanges,
     BudgetExhaustedError,
     EntityRef,
+    HistoryChanges,
     HistoryPage,
     HistorySpan,
 )
@@ -15,14 +17,18 @@ from themeparks._errors import (
     ThemeParksError,
     TimeoutError,
 )
+from themeparks._generated.models import HistoryOpening
 from themeparks._ratelimit import RateLimit, RateLimits
 from themeparks._transport import RetryConfig
 
 __all__ = [
     "APIError",
+    "AsyncHistoryChanges",
     "AsyncThemeParks",
     "BudgetExhaustedError",
     "EntityRef",
+    "HistoryChanges",
+    "HistoryOpening",
     "HistoryPage",
     "HistorySpan",
     "RateLimit",

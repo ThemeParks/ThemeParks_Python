@@ -1,5 +1,116 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **`themeparks-backfill --since YYYY-MM-DD` and `--until YYYY-MM-DD`.** A key
+  that reaches the whole archive used to download all of it, every time: a
+  buyer who wanted the last twelve months got five years. Both days are
+  inclusive and must be real calendar days written `YYYY-MM-DD`; `--since`
+  after `--until` is refused before anything is requested. `--since` applies when a file is started. A later run accepts the
+  same `--since` or a later one (a cron line computing "30 days ago" works), and
+  refuses one earlier than the file's first day, or one that would leave a gap,
+  instead of quietly handing back a file that is not what was asked for.
+
+- **`history.changes()` exposes the `opening` state.** The raw history
+  response carries, per entity, the state in force at the start of the range,
+  and `changes()` threw it away. Without it the minutes between midnight and an
+  entity's first change had no known status, so a day rebuilt from raw history
+  disagreed with the daily summary whenever a ride was still running from the
+  night before. The result of `changes()` now has `opening`, a dict of
+  `HistoryOpening` keyed by entity id, covering every entity in the response,
+  including one that did not change all day. Iterating it yields exactly what it
+  always did, and reading `opening` costs no extra request. The async client's
+  result has the same attribute once the response has arrived: iterate first,
+  or `await changes.load()`.
+
+- **`HistorySpan.final_through`**: the newest day the archive has recorded that
+  the key may read, the earlier of `recorded_to` and `retrievable_through`: the
+  place to stop if you fetch each day once. A property, so `a, b, c = span`
+  still works.
+
+- **`HistoryOpening`** is exported, and `HistoryChanges.close()` /
+  `AsyncHistoryChanges.aclose()` end iteration early, as they did on the
+  generators these replaced.
+
+- **An interrupted `themeparks-backfill` never appends a day twice.** The state
+  file is written before the first request and after every page, atomically,
+  with the size of the data file at that moment; the next run first cuts the
+  file back to that size. Ctrl-C, SIGTERM (now exit 143) and SIGKILL at any point
+  cost at most the page in flight. Two runs on the same park and `--out` at once
+  are refused (POSIX).
+
+### Fixed
+
+- **A finished park now updates on the next run.** A rerun used to print
+  `already complete` and exit 0 without fetching a single new day, so a nightly
+  cron looked healthy and never updated; the only way to get yesterday was
+  `--overwrite`, which downloaded the whole archive again. A finished file is now
+  carried forward from the day after its last one, appending only the new days.
+  An interrupted run still resumes exactly where it stopped, including a rerun
+  interrupted before its first page, which would otherwise have started again
+  from the top of the archive.
+
+- **The newest rows of a backfill were partial days, and stayed that way.** A run
+  ended on `retrievableThrough`, which is usually today: today's row is the day
+  so far, and the archive records days 2 to 3 behind live data, so the last few
+  days of every file were still changing when they were written. Magic Kingdom's
+  last day summed to about half the operating minutes of a full one. A run now
+  ends at `final_through`, says so when it holds days back, and the next run adds
+  them once they are final. Each day is fetched once, as the archive recorded
+  it; the README says how to fetch a range again if the archive later
+  re-records it.
+
+  **Files written by 4.0.x are corrected once.** Their state file does not say
+  which of their newest days were final, so the first run of this version
+  removes the rows from the last seven days before that run's end and fetches
+  those days again. Every other row is left byte for byte as it was. A 4.0 file
+  whose newest row is older than that is not rewritten at all, and one that lies
+  wholly inside those seven days, as every anonymous 7-day file does, is simply
+  downloaded again. The state file format moves to version 2 for this; version 1
+  files from this SDK are upgraded, not refused.
+
+- **An interrupted nightly extension appended the same days twice.** The state
+  was written only at the end of a run or on an SDK error, so Ctrl-C, SIGTERM
+  or SIGKILL during an extension left it saying finished through the old day,
+  and the rerun appended those days again. See the checkpointing above.
+
+- **A run that stopped part-way through its first page lost days.** It resumed
+  from the newest day any entity had reached; rows arrive entity by entity, so
+  the entities behind it lost the days in between. Checkpoints make this
+  impossible for new files, and an older state with only that day goes back a
+  whole page (31 days) instead.
+
+- **The state recorded the start asked for, not the first day written.** After
+  the key's window moved it later, a `--since` earlier than the real first day
+  passed silently. `start` is now the first day written and a new `since`
+  field keeps the one asked for, so the same `--since` keeps working and a
+  different one before the file is refused.
+
+- **A continued file could skip ahead to the key's first day.** When the day a
+  file continues from is older than the key may read, because a cron missed more
+  days than the window or a plan lapsed, the run carried on from the key's first
+  day and left a gap the state file did not record. It is refused now with exit
+  1, the file and its state untouched, and a message naming `--overwrite`. A
+  fixed `--since` older than the window is not affected: the file starts at the
+  key's first day, and the same command line keeps working every night.
+
+- **A finished file written to a different column layout was appended to.** Only
+  an unfinished one was refused. A finished one fell through to a fresh start,
+  which opened the existing file in append mode and wrote the whole archive into
+  it a second time under a second header, exit 0. It is refused now, the same
+  way.
+
+- **A state file whose data file had been deleted was continued**, producing a
+  file that started part-way through its range and was then recorded as
+  complete. The park is downloaded again from the start instead.
+
+- **The README said `waitTime` is an `int`.** The API's schema declares it a
+  JSON `number`, the models type it `float`, and a raw row dumped to JSON says
+  `45.0`. The README now says `float | None`, explains the `45.0`, and a test
+  holds its table to the models' types.
+
 ## [4.0.1] - 2026-09-28
 
 ### Fixed
