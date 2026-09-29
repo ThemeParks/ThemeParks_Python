@@ -43,8 +43,8 @@
     {
       "name": "a resumed run failing any OTHER way deletes the accumulated file",
       "file": "themeparks/backfill.py",
-      "find": "        if progress.written == 0 and not resumed_run:\n            out_path.unlink(missing_ok=True)\n        raise",
-      "replace": "        if progress.written == 0:\n            out_path.unlink(missing_ok=True)\n        raise",
+      "find": "        if progress.written == 0 and not resumed_run:\n            out_path.unlink(missing_ok=True)\n            state_path.unlink(missing_ok=True)\n        raise",
+      "replace": "        if progress.written == 0:\n            out_path.unlink(missing_ok=True)\n            state_path.unlink(missing_ok=True)\n        raise",
       "why": "`written` counts rows THIS process wrote. On a resumed run the file holds everything the previous runs fetched."
     },
     {
@@ -174,13 +174,6 @@
       "why": "4.0.1's behaviour: a rerun of a finished park printed that it was complete and exited 0, so a nightly cron never fetched another day."
     },
     {
-      "name": "a rerun interrupted before its first page forgets where it began",
-      "file": "themeparks/backfill.py",
-      "find": "        return self.first_day\n",
-      "replace": "        return None\n",
-      "why": "With no page boundary and no row, the state recorded nothing, and the next run fell back to the top of the archive and appended a second copy of it."
-    },
-    {
       "name": "a finished state written to another contract is appended to",
       "file": "themeparks/backfill.py",
       "find": "    if mismatch is not None:\n",
@@ -197,8 +190,8 @@
     {
       "name": "a 4.0 file keeps its partial tail",
       "file": "themeparks/backfill.py",
-      "find": "if _trim_after(out_path, fmt, keep_through) == 0:",
-      "replace": "if False:",
+      "find": "        _trim_after(out_path, fmt, keep_through)\n        upgraded",
+      "replace": "        upgraded",
       "why": "The partial days 4.0 wrote stay in the file for good, next to nothing that would ever correct them."
     },
     {
@@ -223,18 +216,109 @@
       "why": "The opening is the state before the first change; without it a day cannot be rebuilt from raw history."
     },
     {
-      "name": "a 4.0 file wholly inside the cut is trimmed to nothing",
-      "file": "themeparks/backfill.py",
-      "find": "if _trim_after(out_path, fmt, keep_through) == 0:",
-      "replace": "if _trim_after(out_path, fmt, keep_through) == -1:",
-      "why": "Every anonymous 4.0 file: an empty file whose state continues from a day the key can no longer read, refused on every later run."
-    },
-    {
       "name": "a continued file jumps to the key's first day",
       "file": "themeparks/backfill.py",
       "find": "            if job.resumed:\n",
       "replace": "            if False:\n",
       "why": "A cron that missed more nights than the key's window carries on from the key's first day, leaving days missing from the middle of a file whose state claims them."
+    },
+    {
+      "name": "the NDJSON trim drops the cut day itself",
+      "file": "themeparks/backfill.py",
+      "find": "if isinstance(day, str) and day > keep_through:",
+      "replace": "if isinstance(day, str) and day >= keep_through:",
+      "why": "The day at the cut is one the state says the file holds; dropping it leaves a hole."
+    },
+    {
+      "name": "a 403 at exactly the resume day is reported as a gap",
+      "file": "themeparks/backfill.py",
+      "find": "if start is None or floor <= str(start):",
+      "replace": "if start is None or floor < str(start):",
+      "why": "The key reaches the day the file continues from, so the refusal is an error to surface, not a gap."
+    },
+    {
+      "name": "the upgraded 4.0 state is not written",
+      "file": "themeparks/backfill.py",
+      "find": "    _write_state(state_path, **upgraded)\n    return upgraded",
+      "replace": "    return upgraded",
+      "why": "A run that stops right after the upgrade leaves a trimmed file under a version-1 state, trimmed again next time."
+    },
+    {
+      "name": "the upgrade keeps the old lastDay",
+      "file": "themeparks/backfill.py",
+      "find": "upgraded[\"lastDay\"] = keep_through if last_day is not None else None",
+      "replace": "pass",
+      "why": "The state would claim a day the trim just removed."
+    },
+    {
+      "name": "no checkpoint after a page",
+      "file": "themeparks/backfill.py",
+      "find": "progress.checkpoint(job.state, _size(handle), progress.resume_from)",
+      "replace": "pass",
+      "why": "The defect a review found: an interrupted extension left the old state, and the rerun appended the same days again."
+    },
+    {
+      "name": "no checkpoint before the first request",
+      "file": "themeparks/backfill.py",
+      "find": "progress.checkpoint(job.state, _size(handle), None if start is None else str(start))",
+      "replace": "pass",
+      "why": "An extension killed mid-first-page left `complete: true` with the old end, and the rerun appended those rows twice."
+    },
+    {
+      "name": "the rerun does not cut back to the checkpoint",
+      "file": "themeparks/backfill.py",
+      "find": "            handle.truncate(size)\n",
+      "replace": "            pass\n",
+      "why": "Whatever was written after the last checkpoint is appended again after it."
+    },
+    {
+      "name": "the state file is written in place",
+      "file": "themeparks/backfill.py",
+      "find": "scratch.write_text(json.dumps(fields, sort_keys=True) + \"\\n\", encoding=\"utf-8\")\n        os.replace(scratch, path)",
+      "replace": "path.write_text(json.dumps(fields, sort_keys=True) + \"\\n\", encoding=\"utf-8\")",
+      "why": "A crash or a full disk mid-write leaves half a state file, which reads as none."
+    },
+    {
+      "name": "a failed trim leaves its scratch copy",
+      "file": "themeparks/backfill.py",
+      "find": "    except BaseException:\n        scratch.unlink(missing_ok=True)\n        raise\n    return kept",
+      "replace": "    except BaseException:\n        raise\n    return kept",
+      "why": "A full disk during a trim leaves a second partial copy of the data file behind."
+    },
+    {
+      "name": "a legacy state resumes at lastDay again",
+      "file": "themeparks/backfill.py",
+      "find": "back = _days_before(last_day, PAGE_DAYS)",
+      "replace": "back = _days_before(last_day, 1)",
+      "why": "lastDay is the newest day ANY entity reached; the entities behind it lose the days in between."
+    },
+    {
+      "name": "the state records the start asked for, not the first day written",
+      "file": "themeparks/backfill.py",
+      "find": "                progress.file_start = first_day\n",
+      "replace": "                pass\n",
+      "why": "After the window clamp, a --since earlier than the real first day passed silently."
+    },
+    {
+      "name": "the same --since before the file's first day is refused",
+      "file": "themeparks/backfill.py",
+      "find": "        and str(since) != str(asked)\n",
+      "replace": "",
+      "why": "A cron line with a fixed --since older than the key's window fails every night after the first."
+    },
+    {
+      "name": "two runs on one park are not locked out",
+      "file": "themeparks/backfill.py",
+      "find": "fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)",
+      "replace": "pass",
+      "why": "Two runs read the same state and append the same days."
+    },
+    {
+      "name": "a 4.0 file emptied by the cut is continued, not started again",
+      "file": "themeparks/backfill.py",
+      "find": "    if size == 0:\n        # Nothing survived the cut",
+      "replace": "    if False:\n        # Nothing survived the cut",
+      "why": "Every anonymous 4.0 file: continued from a day the key can no longer read, and refused on every later run."
     }
   ]
 }

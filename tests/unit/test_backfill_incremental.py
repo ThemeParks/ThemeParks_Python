@@ -28,6 +28,8 @@ import csv
 import inspect
 import io
 import json
+import os
+import signal as sig
 from collections import Counter
 from datetime import date, timedelta
 from pathlib import Path
@@ -86,6 +88,14 @@ class _Archive:
         self.calls: list[tuple[str, str]] = []
         #: Raise BudgetExhaustedError on the Nth page request (1-based), or never.
         self.budget_on_page: int | None = None
+        #: Raise `interrupt` after this many rows have been yielded, or never.
+        #: A BaseException, so nothing in the command can catch it: this is
+        #: Ctrl-C, SIGTERM, or (with no handler running at all) SIGKILL.
+        self.interrupt_after_rows: int | None = None
+        self.interrupt: type[BaseException] = KeyboardInterrupt
+        #: Raise OSError (a full disk) after this many rows, or never.
+        self.disk_full_after_rows: int | None = None
+        self._rows_served = 0
         self._pages_served = 0
 
     def advance(self, days: int) -> None:
@@ -112,6 +122,11 @@ class _Archive:
                 ref = EntityRef(entity, f"Ride {entity}", "ATTRACTION")
                 day = page_start
                 while day <= page_end:
+                    if self._rows_served == self.interrupt_after_rows:
+                        raise self.interrupt
+                    if self._rows_served == self.disk_full_after_rows:
+                        raise OSError(28, "No space left on device")
+                    self._rows_served += 1
                     yield ref, _row(day, final=day <= _day(self.recorded_to))
                     day += timedelta(days=1)
             following = page_end + timedelta(days=1)
@@ -683,7 +698,13 @@ class TestTheKeysWindowAndAFileBeingContinued:
         assert _run(archive, tmp_path) == 1
         assert archive.calls[-1][0] == "2026-09-27", "asked for anything but its own next day"
         assert (tmp_path / "p.ndjson").read_bytes() == before
-        assert _state(tmp_path) == state_before
+        # Marked unfinished before the request, continuing from the same day,
+        # vouching for the same bytes: nothing about the file moved.
+        state = _state(tmp_path)
+        assert state["complete"] is False
+        assert state["resumeFrom"] == "2026-09-27"
+        assert state["size"] == state_before["size"]
+        assert state["start"] == state_before["start"]
         err = capsys.readouterr().err
         assert "reaches back to 2026-10-05" in err
         assert "continues from 2026-09-27" in err
@@ -804,3 +825,322 @@ def test_a_csv_line_round_trips_through_the_csv_module() -> None:
     line = backfill._csv_line(cells)
     parsed = next(csv.reader(io.StringIO(line, newline="")))
     assert ",".join(backfill._csv_cell(v) for v in parsed) + "\n" == line
+
+
+# --------------------------------------------------------------------------
+# Interruptions: Ctrl-C, SIGTERM, SIGKILL, a full disk.
+# --------------------------------------------------------------------------
+
+
+class _Kill(BaseException):
+    """Stands in for SIGKILL: no handler in the command can catch it."""
+
+
+class TestAnInterruptedRunNeverDuplicatesADay:
+    """The state was written only at the end or on an SDK error.
+
+    So Ctrl-C, SIGTERM or SIGKILL during a nightly extension left the state
+    saying `complete: true` with the OLD end, and the rerun appended the same
+    days again: 70 duplicate rows, exit 0. The state is now checkpointed after
+    every page with the file's size at that moment, and a rerun first cuts the
+    file back to that size, so whatever was written after the last checkpoint is
+    discarded and fetched again. No day is ever appended twice.
+    """
+
+    @pytest.mark.parametrize("interrupt", [KeyboardInterrupt, SystemExit, _Kill])
+    @pytest.mark.parametrize("after_rows", [0, 1, 31, 45, 62, 70])
+    def test_an_extension_interrupted_anywhere_reruns_cleanly(
+        self, tmp_path: Path, interrupt: type[BaseException], after_rows: int
+    ) -> None:
+        archive = _Archive()
+        _run(archive, tmp_path)
+        archive.advance(40)  # two pages of new days, 80 rows
+        archive.interrupt = interrupt
+        archive.interrupt_after_rows = archive._rows_served + after_rows
+        with pytest.raises(interrupt):
+            _run(archive, tmp_path)
+
+        archive.interrupt_after_rows = None
+        assert _run(archive, tmp_path) == 0
+        rows = _rows(tmp_path)
+        _assert_every_row_final_and_unique(rows)
+        assert max(r["date"] for r in rows) == "2026-11-05"
+        days = {r["date"] for r in rows}
+        assert len(days) == (date(2026, 11, 5) - date(2026, 6, 1)).days + 1, "a day went missing"
+
+    @pytest.mark.parametrize("fmt", ["ndjson", "csv"])
+    def test_a_first_run_interrupted_mid_page_resumes_without_duplicates(
+        self, tmp_path: Path, fmt: str
+    ) -> None:
+        archive = _Archive()
+        archive.interrupt_after_rows = 100  # inside the second page
+        with pytest.raises(KeyboardInterrupt):
+            _run(archive, tmp_path, fmt)
+        archive.interrupt_after_rows = None
+        assert _run(archive, tmp_path, fmt) == 0
+        _assert_every_row_final_and_unique(_rows(tmp_path, fmt))
+        if fmt == "csv":
+            raw = (tmp_path / "p.csv").read_bytes()
+            assert raw.count(b"\xef\xbb\xbf") == 1
+            assert raw.decode("utf-8-sig").count("parkId,") == 1
+
+    def test_a_first_run_interrupted_before_its_first_row_starts_again(
+        self, tmp_path: Path
+    ) -> None:
+        # Nothing was written, so there is nothing to continue: no refusal over
+        # a file "this command did not write", and no empty file left behind.
+        archive = _Archive()
+        archive.interrupt_after_rows = 0
+        with pytest.raises(KeyboardInterrupt):
+            _run(archive, tmp_path)
+        archive.interrupt_after_rows = None
+        assert _run(archive, tmp_path) == 0
+        _assert_every_row_final_and_unique(_rows(tmp_path))
+
+    def test_the_state_is_checkpointed_after_every_page(self, tmp_path: Path) -> None:
+        archive = _Archive()
+        seen: list[dict] = []
+        original = archive.days_with_entities
+
+        def spying(start=None, end=None, *, max_wait=120.0, on_page=None):
+            def hook(page: HistoryPage) -> None:
+                on_page(page)
+                seen.append(_state(tmp_path))
+
+            yield from original(start, end, max_wait=max_wait, on_page=hook)
+
+        archive.days_with_entities = spying  # type: ignore[method-assign]
+        _run(archive, tmp_path)
+        assert [s["resumeFrom"] for s in seen[:-1]] == ["2026-07-02", "2026-08-02", "2026-09-02"]
+        sizes = [s["size"] for s in seen[:-1]]
+        assert sizes == sorted(sizes) and len(set(sizes)) == len(sizes)
+        # The last page has no next day to record; completion does that.
+        assert all(s["complete"] is False for s in seen)
+        final = _state(tmp_path)
+        assert final["complete"] is True
+        assert final["size"] == (tmp_path / "p.ndjson").stat().st_size
+
+    def test_a_file_shorter_than_its_checkpoint_is_refused(self, tmp_path: Path, capsys) -> None:
+        # Something other than this command cut the file. Appending would leave
+        # a hole the state claims is filled.
+        archive = _Archive()
+        _run(archive, tmp_path)
+        path = tmp_path / "p.ndjson"
+        path.write_bytes(path.read_bytes()[:-10])
+        archive.advance(1)
+        assert _run(archive, tmp_path) == 1
+        assert "--overwrite" in capsys.readouterr().err
+
+
+class TestAPartialFirstPageLosesNoEntity:
+    """A full disk mid-page resumed from the newest day of ANY entity.
+
+    `lastDay` is the maximum across entities, and rows arrive entity by entity,
+    so entity A could be written through day 20 while entity B had only reached
+    day 3; resuming at day 20 lost B's days 4 to 19 for good.
+    """
+
+    def test_a_disk_full_mid_first_page_loses_nothing(self, tmp_path: Path) -> None:
+        archive = _Archive()
+        archive.disk_full_after_rows = 40  # ent-a's 31 days, then 9 of ent-b's
+        with pytest.raises(OSError):
+            _run(archive, tmp_path)
+        archive.disk_full_after_rows = None
+        assert _run(archive, tmp_path) == 0
+        rows = _rows(tmp_path)
+        _assert_every_row_final_and_unique(rows)
+        for entity in ("ent-a", "ent-b"):
+            days = {r["date"] for r in rows if r["entityId"] == entity}
+            assert len(days) == (date(2026, 9, 26) - date(2026, 6, 1)).days + 1, entity
+
+    def test_a_legacy_state_with_only_last_day_resumes_a_whole_page_back(
+        self, tmp_path: Path
+    ) -> None:
+        # A 4.0 file interrupted in its first page recorded only lastDay. The
+        # page could have started up to 30 days earlier, so that is where the
+        # rerun goes, after removing every row from there on.
+        archive = _Archive()
+        lines = []
+        for entity, last in (("ent-a", "2026-07-20"), ("ent-b", "2026-07-03")):
+            day = date(2026, 6, 1)
+            while day <= date.fromisoformat(last):
+                lines.append(
+                    json.dumps(
+                        {"entityId": entity, "date": day.isoformat(), "operatingMinutes": 600}
+                    )
+                )
+                day += timedelta(days=1)
+        (tmp_path / "p.ndjson").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        _v1_state(tmp_path, "ndjson", complete=False, lastDay="2026-07-20", resumeFrom=None)
+        assert _run(archive, tmp_path) == 0
+        assert archive.calls[-1][0] == "2026-06-20"
+        rows = _rows(tmp_path)
+        assert len(_keys(rows)) == len(rows)
+        for entity in ("ent-a", "ent-b"):
+            days = {r["date"] for r in rows if r["entityId"] == entity}
+            assert len(days) == (date(2026, 9, 26) - date(2026, 6, 1)).days + 1, entity
+
+
+class TestTheStateRecordsTheFilesRealFirstDay:
+    def test_after_the_window_clamp_start_is_the_first_day_written(self, tmp_path: Path) -> None:
+        archive = _Archive(archive_from="2025-06-01", floor="2026-09-01")
+        _run(archive, tmp_path, window=_Range(since="2026-02-01"))
+        state = _state(tmp_path)
+        assert state["start"] == "2026-09-01"
+        assert state["since"] == "2026-02-01"
+        assert min(r["date"] for r in _rows(tmp_path)) == "2026-09-01"
+
+    def test_a_different_since_before_the_real_first_day_is_refused(
+        self, tmp_path: Path, capsys
+    ) -> None:
+        archive = _Archive(archive_from="2025-06-01", floor="2026-09-01")
+        _run(archive, tmp_path, window=_Range(since="2026-02-01"))
+        archive.advance(1)
+        # The key's window moved; this --since asks for days the file never had.
+        assert _run(archive, tmp_path, window=_Range(since="2026-03-01")) == 1
+        err = capsys.readouterr().err
+        assert "2026-09-01" in err and "--overwrite" in err
+
+    def test_the_same_since_keeps_working(self, tmp_path: Path) -> None:
+        archive = _Archive(archive_from="2025-06-01", floor="2026-09-01")
+        _run(archive, tmp_path, window=_Range(since="2026-02-01"))
+        archive.advance(1)
+        assert _run(archive, tmp_path, window=_Range(since="2026-02-01")) == 0
+
+
+class TestTheWindowFloorEdge:
+    def test_a_403_whose_floor_is_the_resume_day_is_an_error_not_a_gap(
+        self, tmp_path: Path
+    ) -> None:
+        # The key reaches exactly the day the file continues from, yet the API
+        # refused: not a gap to report, an error to surface.
+        archive = _Archive()
+        _run(archive, tmp_path)
+        archive.advance(1)
+
+        def refuse(start=None, end=None, *, max_wait=120.0, on_page=None):
+            raise backfill_test_403(str(start))
+            yield  # pragma: no cover
+
+        archive.days_with_entities = refuse  # type: ignore[method-assign]
+        with pytest.raises(APIError):
+            _run(archive, tmp_path)
+
+
+class TestTheUpgradeIsRecordedBeforeTheRunGoesOn:
+    def test_a_run_that_stops_after_the_upgrade_leaves_the_upgraded_state(
+        self, tmp_path: Path
+    ) -> None:
+        # The archive has not moved past the cut, so the run is up to date right
+        # after upgrading and never writes a checkpoint of its own: the state on
+        # disk is the upgrade's, or nothing.
+        archive = _Archive(recorded_to="2026-09-21")
+        _write_as_4_0(tmp_path, "ndjson", archive, {})
+        _v1_state(tmp_path, "ndjson")
+
+        assert _run(archive, tmp_path) == 0
+        assert archive.calls == []
+        state = _state(tmp_path)
+        assert state["size"] == (tmp_path / "p.ndjson").stat().st_size
+        assert state["stateVersion"] == backfill.STATE_VERSION
+        assert state["end"] == "2026-09-21"
+        assert state["lastDay"] == "2026-09-21"
+        assert max(r["date"] for r in _rows(tmp_path)) == "2026-09-21"
+
+
+class TestTrimBoundaries:
+    @pytest.mark.parametrize("fmt", ["ndjson", "csv"])
+    def test_the_cut_day_itself_is_kept(self, tmp_path: Path, fmt: str) -> None:
+        archive = _Archive(
+            archive_from="2026-09-19", through="2026-09-23", recorded_to="2026-09-23"
+        )
+        _write_as_4_0(tmp_path, fmt, archive, {})
+        backfill._trim_after(tmp_path / f"p.{fmt}", fmt, "2026-09-21")
+        assert sorted({r["date"] for r in _rows(tmp_path, fmt)}) == [
+            "2026-09-19",
+            "2026-09-20",
+            "2026-09-21",
+        ]
+
+    def test_the_scratch_file_is_removed_when_the_trim_fails(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        path = tmp_path / "p.ndjson"
+        path.write_text('{"date": "2026-09-01"}\n', encoding="utf-8")
+
+        def boom(_src, scratch, *_a):
+            scratch.write_text('{"date": "2026-09-01"', encoding="utf-8")  # half a copy
+            raise OSError(28, "No space left on device")
+
+        monkeypatch.setattr(backfill, "_copy_rows_through", boom)
+        with pytest.raises(OSError):
+            backfill._trim_after(path, "ndjson", "2026-09-21")
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["p.ndjson"]
+
+
+class TestStateWritesAreAtomic:
+    def test_a_failed_write_leaves_the_old_state(self, tmp_path: Path, monkeypatch) -> None:
+        path = tmp_path / "s.json"
+        backfill._write_state(path, a=1)
+
+        def boom(*_a, **_k):
+            raise OSError(28, "No space left on device")
+
+        monkeypatch.setattr(backfill.os, "replace", boom)
+        with pytest.raises(OSError):
+            backfill._write_state(path, a=2)
+        assert json.loads(path.read_text(encoding="utf-8")) == {"a": 1}
+
+
+class TestTwoRunsOnOneFile:
+    def test_a_second_run_on_the_same_park_and_out_is_refused(self, tmp_path: Path, capsys) -> None:
+        pytest.importorskip("fcntl")
+        archive = _Archive()
+        with backfill._park_lock(tmp_path, "p", "ndjson") as held:
+            assert held
+            assert _run(archive, tmp_path) == 1
+        assert "another themeparks-backfill" in capsys.readouterr().err
+        assert archive.calls == []
+        assert _run(archive, tmp_path) == 0
+
+
+class TestAnUnfinishedFileAndAnEarlyUntil:
+    def test_until_before_the_resume_point_says_so(self, tmp_path: Path, capsys) -> None:
+        archive = _Archive()
+        archive.budget_on_page = 3
+        assert _run(archive, tmp_path) == backfill.EX_TEMPFAIL
+        archive.budget_on_page = None
+        capsys.readouterr()
+        assert _run(archive, tmp_path, window=_Range(until="2026-06-15")) == 0
+        err = capsys.readouterr().err
+        assert "continues from 2026-08-02" in err
+        assert "--until 2026-06-15" in err
+        assert "plan no longer reaches" not in err
+
+
+class TestSigterm:
+    def test_sigterm_stops_like_ctrl_c_with_exit_143(self, capsys, monkeypatch) -> None:
+        if not hasattr(sig, "SIGTERM") or os.name == "nt":
+            pytest.skip("POSIX signals only")
+
+        def main(argv=None):
+            os.kill(os.getpid(), sig.SIGTERM)
+            raise AssertionError("SIGTERM did not interrupt")  # pragma: no cover
+
+        before = sig.getsignal(sig.SIGTERM)
+        monkeypatch.setattr(backfill, "main", main)
+        assert backfill.cli() == 143
+        assert "run the same command again" in capsys.readouterr().err
+        assert sig.getsignal(sig.SIGTERM) is before, "the handler was left installed"
+
+    def test_the_anonymous_notice_says_how_many_final_days(
+        self, tmp_path: Path, capsys, monkeypatch
+    ) -> None:
+        monkeypatch.delenv("THEMEPARKS_API_KEY", raising=False)
+        monkeypatch.setattr(backfill, "_catalogue", lambda tp: [("p", "Park", "d", "Dest")])
+        monkeypatch.setattr(backfill, "_run_all", lambda tp, targets, args: 0)
+        monkeypatch.setattr(backfill, "ThemeParks", lambda **kw: _NullClient())
+        backfill.main(["p", "--out", str(tmp_path)])
+        err = capsys.readouterr().err
+        assert err.count("4 or 5") == 2
+        assert "final" in err
