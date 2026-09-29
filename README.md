@@ -281,7 +281,7 @@ with ThemeParks(api_key=KEY) as tp:
 
     # What exists, and what your key may read. Same three fields whether the
     # id is a park or a single ride. `final_through` is the newest day whose
-    # row will not change again: store through that, ask for the rest later.
+    # the archive has recorded: store through that, ask for the rest later.
     span = history.span()
     print(span.archive_from, span.recorded_to, span.retrievable_through)
     print(span.final_through)
@@ -360,8 +360,25 @@ forward from the day after its last one, so the same command in a nightly cron
 appends the new days and nothing else. Only **final** days are written: today's
 row is the day so far, and the archive records days 2 to 3 behind live data, so
 the newest days can still change. A run stops at the newest final day
-(`span().final_through`) and says so, and the next run adds the rest. Every row
-in the file is one that will not change later.
+(`span().final_through`) and says so, and the next run adds the rest. Each day
+is fetched once, as the archive recorded it.
+
+**Fetching a range again.** The archive can occasionally re-record past days,
+for example when a park's feed is repaired. A file never rewrites rows it
+already holds, so to pick up a correction, download the affected days into a
+separate directory and replace those `(entityId, date)` rows where you load the
+data, or start the file again:
+
+```bash
+themeparks-backfill "Epcot" --since 2026-06-01 --until 2026-06-30 --out ./refetch
+themeparks-backfill "Epcot" --overwrite              # or: the whole file again
+```
+
+Stopping a run at any point is safe. The state file is written after every page
+with the size of the file at that moment, and the next run first cuts off
+anything written after it, so no day is ever appended twice. Ctrl-C and SIGTERM
+exit 130 and 143; a killed run needs nothing either. Two runs on the same park
+and `--out` at once are refused.
 
 `--since` applies when a file is started. Later runs continue that file and
 accept the same `--since`, or a later one, such as a cron line computing "30

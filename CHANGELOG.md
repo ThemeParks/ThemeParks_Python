@@ -25,9 +25,21 @@
   result has the same attribute once the response has arrived: iterate first,
   or `await changes.load()`.
 
-- **`HistorySpan.final_through`**: the newest day whose daily row will not
-  change again, the earlier of `recorded_to` and `retrievable_through`. A
-  property, so `a, b, c = span` still works.
+- **`HistorySpan.final_through`**: the newest day the archive has recorded that
+  the key may read, the earlier of `recorded_to` and `retrievable_through`: the
+  place to stop if you fetch each day once. A property, so `a, b, c = span`
+  still works.
+
+- **`HistoryOpening`** is exported, and `HistoryChanges.close()` /
+  `AsyncHistoryChanges.aclose()` end iteration early, as they did on the
+  generators these replaced.
+
+- **An interrupted `themeparks-backfill` never appends a day twice.** The state
+  file is written before the first request and after every page, atomically,
+  with the size of the data file at that moment; the next run first cuts the
+  file back to that size. Ctrl-C, SIGTERM (now exit 143) and SIGKILL at any point
+  cost at most the page in flight. Two runs on the same park and `--out` at once
+  are refused (POSIX).
 
 ### Fixed
 
@@ -46,7 +58,9 @@
   days of every file were still changing when they were written. Magic Kingdom's
   last day summed to about half the operating minutes of a full one. A run now
   ends at `final_through`, says so when it holds days back, and the next run adds
-  them once they are final. Every row in the file is one that will not change.
+  them once they are final. Each day is fetched once, as the archive recorded
+  it; the README says how to fetch a range again if the archive later
+  re-records it.
 
   **Files written by 4.0.x are corrected once.** Their state file does not say
   which of their newest days were final, so the first run of this version
@@ -56,6 +70,23 @@
   wholly inside those seven days, as every anonymous 7-day file does, is simply
   downloaded again. The state file format moves to version 2 for this; version 1
   files from this SDK are upgraded, not refused.
+
+- **An interrupted nightly extension appended the same days twice.** The state
+  was written only at the end of a run or on an SDK error, so Ctrl-C, SIGTERM
+  or SIGKILL during an extension left it saying finished through the old day,
+  and the rerun appended those days again. See the checkpointing above.
+
+- **A run that stopped part-way through its first page lost days.** It resumed
+  from the newest day any entity had reached; rows arrive entity by entity, so
+  the entities behind it lost the days in between. Checkpoints make this
+  impossible for new files, and an older state with only that day goes back a
+  whole page (31 days) instead.
+
+- **The state recorded the start asked for, not the first day written.** After
+  the key's window moved it later, a `--since` earlier than the real first day
+  passed silently. `start` is now the first day written and a new `since`
+  field keeps the one asked for, so the same `--since` keeps working and a
+  different one before the file is refused.
 
 - **A continued file could skip ahead to the key's first day.** When the day a
   file continues from is older than the key may read, because a cron missed more

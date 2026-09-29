@@ -308,7 +308,8 @@ not by `recorded_to`: the archive holds more than a free or Pro key is
 entitled to read, and asking past the entitlement is how a backfill walks into
 a wall of 403s at the end of a long run. If you write each day once and never
 revisit it, end at `span.final_through` instead: the earlier of the two, and
-the newest day whose row will not change again.
+the newest day the archive has recorded. The archive can re-record a past day
+after a feed repair, so fetch a range again if you need to pick that up.
 
 ```python
 import json
