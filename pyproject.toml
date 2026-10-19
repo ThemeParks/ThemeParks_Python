@@ -48,7 +48,7 @@ dev = [
   "pytest-recording>=0.13",
   # Upper-bounded: an unpinned minor bump is what started reformatting
   # Markdown code blocks and turned CI red on unrelated PRs.
-  "ruff>=0.4,<0.17",
+  "ruff>=0.4,<0.18",
   "mypy>=1.10",
   "datamodel-code-generator[http]>=0.25",
 ]
