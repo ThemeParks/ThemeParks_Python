@@ -5,11 +5,25 @@ from __future__ import annotations
 
 from datetime import date as date_aliased
 from enum import Enum, IntEnum
-from typing import Annotated
+from typing import Annotated, Any
 
 from pydantic import AwareDatetime, ConfigDict, Field
 
 from themeparks._models_base import ApiModel
+
+
+class AttractionType(Enum):
+    """
+    Kind of attraction: a ride, a show, a means of transport, a parade, a meet-and-greet, or something else. UNKNOWN when the park does not say.
+    """
+
+    UNKNOWN = "UNKNOWN"
+    RIDE = "RIDE"
+    SHOW = "SHOW"
+    TRANSPORT = "TRANSPORT"
+    PARADE = "PARADE"
+    MEET_AND_GREET = "MEET_AND_GREET"
+    OTHER = "OTHER"
 
 
 class Success(Enum):
@@ -77,7 +91,7 @@ class DiningAvailability(ApiModel):
     """
 
 
-class AttractionType(Enum):
+class AttractionType1(Enum):
     """
     Kind of attraction. Present on ATTRACTION entities.
     """
@@ -211,22 +225,37 @@ class HistoryCoverageKindSpan(ApiModel):
 
 class HistoryDailyExtremeWaits(ApiModel):
     """
-    How many wait readings of 480 minutes or more the day's statistics include. Such readings are usually feed errors (values like 999); they are counted here as a flag and stay in every statistic. Counted per reading while OPERATING. Present only when there were some, and then with both counts.
+    How many wait readings of 480 minutes or more the day had. Such readings are usually feed errors (values like 999); they are counted here as a flag. Those at or below the destination's plausibility ceiling stay in every statistic; those above it are left out and also counted in implausibleWaits. Wait values above 1440 minutes (24 hours) are feed errors and are omitted. Counted per reading while OPERATING. Present only when there were some, and then with both counts.
     """
 
     standby: int
     """
-    Standby readings of 480 minutes or more included in the day's standby statistics.
+    Standby readings of 480 minutes or more.
     """
     singleRider: int
     """
-    Single-rider readings of 480 minutes or more included in the day's single-rider statistics.
+    Single-rider readings of 480 minutes or more.
+    """
+
+
+class HistoryDailyImplausibleWaits(ApiModel):
+    """
+    How many wait readings above the destination's plausibility ceiling the day had: 600 minutes, or 300 at destinations whose longest genuine waits are far shorter (listed in the history notes). Such a reading is a value the park's feed or app shows that cannot be a real queue (a placeholder like 999, or an unlabelled code); the live API still reports it as the park published it, and the raw history keeps it, but the day's statistics leave it out as if no wait were showing. Counted per reading while OPERATING. Present only when there were some, and then with both counts.
+    """
+
+    standby: int
+    """
+    Standby readings above the destination's plausibility ceiling, left out of the day's standby statistics.
+    """
+    singleRider: int
+    """
+    Single-rider readings above the destination's plausibility ceiling, left out of the day's single-rider statistics.
     """
 
 
 class HistoryDailyStats(ApiModel):
     """
-    Wait statistics for the day. p50, mean and p90 are weighted by how many minutes each wait was showing; min and max are the extremes of every value posted. Only minutes where the entity was OPERATING (not unknown) and the wait was valid count. A wait is valid during the run and on the day it was posted; the wait showing when a ride opens counts from the opening if it last changed within 24 hours; a wait carried over midnight does not count until it changes. Nothing the park reported is excluded: a reading of 480 minutes or more stays in these statistics and is counted in the row's `extremeWaits`. Absent when no minute counted.
+    Wait statistics for the day. p50, mean and p90 are weighted by how many minutes each wait was showing; min and max are the extremes of every value posted. Only minutes where the entity was OPERATING (not unknown) and the wait was valid count. A wait is valid during the run and on the day it was posted; the wait showing when a ride opens counts from the opening if it last changed within 24 hours; a wait carried over midnight does not count until it changes. Wait values above 1440 minutes (24 hours) are feed errors and are omitted. So is a reading above the destination's plausibility ceiling (600 minutes, or 300 at the destinations the history notes list), which is counted in the row's `implausibleWaits` instead. Otherwise, a reading of 480 minutes or more stays in these statistics and is counted in the row's `extremeWaits`. Absent when no minute counted.
     """
 
     min: int
@@ -247,7 +276,7 @@ class HistoryDailyStats(ApiModel):
     """
     max: int
     """
-    Highest wait posted during the counted minutes, including a brief spike. It can be a feed error: the row's extremeWaits counts readings of 480 minutes or more.
+    Highest wait posted during the counted minutes, including a brief spike. It can be a feed error: the row's extremeWaits counts readings of 480 minutes or more. It never exceeds the destination's plausibility ceiling (see implausibleWaits).
     """
 
 
@@ -387,6 +416,33 @@ class Error9(ApiModel):
 
 class HistoryErrorWindowExceeded(ApiModel):
     error: Error9
+
+
+class HistoryKnownGap(ApiModel):
+    """
+    A window where nothing was observed for this entity's destination and nothing can be recovered. /history has no rows inside it and /history/daily counts its minutes as unknown. Rows either side are real.
+    """
+
+    from_: Annotated[AwareDatetime, Field(alias="from")]
+    """
+    First instant with no data (UTC, inclusive).
+    """
+    to: AwareDatetime
+    """
+    First instant with data again (UTC, exclusive).
+    """
+    firstDay: date_aliased
+    """
+    First park-local day the gap touches, partly or wholly.
+    """
+    lastDay: date_aliased
+    """
+    Last park-local day the gap touches, partly or wholly.
+    """
+    reason: str
+    """
+    Why the data is missing, in one sentence.
+    """
 
 
 class Degraded(Enum):
@@ -690,6 +746,133 @@ class SchedulePriceType(Enum):
     ATTRACTION = "ATTRACTION"
 
 
+class Success4(Enum):
+    """
+    Always false.
+    """
+
+    boolean_False = False
+
+
+class Type12(Enum):
+    Bad_request = "Bad request"
+
+
+class Code4(IntEnum):
+    """
+    Repeats the HTTP status.
+    """
+
+    integer_400 = 400
+
+
+class Error12(ApiModel):
+    type: Type12
+    message: str
+    """
+    Starts with "Validation failed: " and names each parameter that was refused and why, e.g. "q: Search term needs at least 3 letters or digits" or "parkId: parkId must be a UUID".
+    """
+    code: Code4 | None = None
+    """
+    Repeats the HTTP status.
+    """
+    details: list[dict[str, Any]] | None = None
+    """
+    One object per refused parameter. Each has a `message` and a `path` naming the parameter; its other fields are validation diagnostics and may change.
+    """
+
+
+class SearchInvalidQuery(ApiModel):
+    """
+    400: the search term or a parameter was refused before any search ran: `q` missing, shorter than 3 letters or digits (2 for Chinese, Japanese and Korean), over 100 characters or over the word limit; `types` not a comma-separated list of entity types; `limit` outside 1 to 25; `parkId` or `destinationId` not a UUID; or a parameter the endpoint does not take. Fix the request: retrying it unchanged gets the same answer.
+    """
+
+    success: Success4
+    """
+    Always false.
+    """
+    error: Error12
+
+
+class Match(Enum):
+    """
+    How the name matched. EXACT: the same name. PREFIX: the name starts with the term. WORD: a word, or every word, of the name starts with the term. CONTAINS: the term appears inside the name. FUZZY: close to a name, with typos forgiven. Results are ordered best first.
+    """
+
+    EXACT = "EXACT"
+    PREFIX = "PREFIX"
+    WORD = "WORD"
+    CONTAINS = "CONTAINS"
+    FUZZY = "FUZZY"
+
+
+class SearchResultDestination(ApiModel):
+    """
+    A destination, by id and name, and where in the world it is.
+    """
+
+    id: str
+    """
+    Entity id.
+    """
+    name: str
+    """
+    Entity name.
+    """
+    country: str
+    """
+    ISO 3166-1 alpha-2 country code, for example US or GB. Hong Kong is HK and Macau is MO, never CN. Null until the destination has been placed.
+    """
+    region: str
+    """
+    State, province or nation in English, for example Florida or England. Never a county. Null where the country is no bigger than a region (HK, MO, SG), and until the destination has been placed.
+    """
+
+
+class SearchResultRef(ApiModel):
+    """
+    A park or destination, by id and name.
+    """
+
+    id: str
+    """
+    Entity id.
+    """
+    name: str
+    """
+    Entity name.
+    """
+
+
+class Type13(Enum):
+    Server_error = "Server error"
+
+
+class Code5(IntEnum):
+    integer_503 = 503
+
+
+class Error13(ApiModel):
+    type: Type13
+    message: str
+    """
+    "Search is busy, try again shortly" or "Search is temporarily unavailable".
+    """
+    code: Code5 | None = None
+
+
+class SearchUnavailable(ApiModel):
+    """
+    503: search is busy, took too long, or has been switched off. Never cached. Wait the Retry-After header's number of seconds (2 when busy, 5 after a timeout, 60 when switched off), then retry once.
+    """
+
+    success: Success4
+    """
+    Always false.
+    """
+    error: Error13
+
+
 class V1MeBudget(ApiModel):
     """
     One budget: the same figures the RateLimit-* and RateLimit-History-* headers carry.
@@ -806,7 +989,7 @@ class EntityData(ApiModel):
     Entity name
     """
     entityType: EntityType
-    attractionType: AttractionType | None = None
+    attractionType: AttractionType1 | None = None
     """
     Kind of attraction. Present on ATTRACTION entities.
     """
@@ -867,6 +1050,10 @@ class HistoryCoverageDocument(ApiModel):
     """
     Keyed by live-data path (status, queue.StandbyQueue, showtimes and so on), as /live and /history name them. Fields the entity never reported are left out.
     """
+    knownGaps: list[HistoryKnownGap]
+    """
+    Known archive gaps overlapping what this entity has recorded. Empty when none apply.
+    """
 
 
 class HistoryDailyInParkHours(ApiModel):
@@ -893,11 +1080,12 @@ class HistoryDailyInParkHours(ApiModel):
     standby: HistoryDailyStats | None = None
     singleRider: HistoryDailyStats | None = None
     extremeWaits: HistoryDailyExtremeWaits | None = None
+    implausibleWaits: HistoryDailyImplausibleWaits | None = None
 
 
 class HistoryDailyRow(ApiModel):
     """
-    One day of an entity's history. standby, singleRider, extremeWaits, showCount and inParkHours are absent when there is nothing to report; a standby block needs a valid wait showing for at least one whole minute. A row without unknownMinutes was counted under earlier rules, and also lacks extremeWaits and inParkHours.
+    One day of an entity's history. standby, singleRider, extremeWaits, implausibleWaits, showCount and inParkHours are absent when there is nothing to report; a standby block needs a valid wait showing for at least one whole minute. A row without unknownMinutes was counted under earlier rules, and also lacks extremeWaits, implausibleWaits and inParkHours.
     """
 
     date: date_aliased
@@ -927,6 +1115,7 @@ class HistoryDailyRow(ApiModel):
     standby: HistoryDailyStats | None = None
     singleRider: HistoryDailyStats | None = None
     extremeWaits: HistoryDailyExtremeWaits | None = None
+    implausibleWaits: HistoryDailyImplausibleWaits | None = None
     showCount: int | None = None
     """
     Distinct performance start times whose park-local day is this day. Present only for entities that published showtimes on the day.
@@ -940,7 +1129,7 @@ class HistoryDailyRow(ApiModel):
 
 class HistoryParkCoverageDocument(ApiModel):
     """
-    What history we hold across a whole PARK, returned by /history/coverage when the entity is a PARK. Its names map to the single-entity document: `fields` is `kinds`, and each `from` and `newest` is a `first` and `last`. It reports depth and breadth; it does not find missing days.
+    What history we hold across a whole PARK, returned by /history/coverage when the entity is a PARK. Its names map to the single-entity document: `fields` is `kinds`, and each `from` and `newest` is a `first` and `last`. It reports depth and breadth, and `knownGaps` lists the verified windows where nothing was observed; it does not search for other missing days.
     """
 
     id: str
@@ -960,6 +1149,10 @@ class HistoryParkCoverageDocument(ApiModel):
     entities: list[HistoryParkCoverageEntity]
     """
     Every entity of the park history is held for.
+    """
+    knownGaps: list[HistoryKnownGap]
+    """
+    Known archive gaps overlapping what this park has recorded. Empty when none apply.
     """
 
 
@@ -1030,6 +1223,39 @@ class SchedulePriceObject(ApiModel):
     available: bool | None = None
     """
     Whether this price option is available
+    """
+
+
+class SearchResult(ApiModel):
+    """
+    One match. Many rides share a name: tell them apart by park and destination, and rides from shows and restaurants by entityType.
+    """
+
+    id: str
+    """
+    Entity id. Use it with GET /v1/entity/{id}, /live, /children and /schedule. A park and the destination it belongs to often share a name: use the PARK id for that park's waits and hours.
+    """
+    name: str
+    """
+    Entity name.
+    """
+    entityType: EntityType
+    attractionType: AttractionType | None = None
+    """
+    Kind of attraction, so a ride can be told from a meet-and-greet or a parade. Null unless entityType is ATTRACTION, or when the kind is not recorded.
+    """
+    match: Match
+    """
+    How the name matched. EXACT: the same name. PREFIX: the name starts with the term. WORD: a word, or every word, of the name starts with the term. CONTAINS: the term appears inside the name. FUZZY: close to a name, with typos forgiven. Results are ordered best first.
+    """
+    location: EntityLocation | None = None
+    park: SearchResultRef | None = None
+    """
+    The park it is in. Null for a destination, a park, and anything not inside a park, such as a resort restaurant.
+    """
+    destination: SearchResultDestination | None = None
+    """
+    The destination it is in, and where that is. For a destination, itself.
     """
 
 
@@ -1222,6 +1448,25 @@ class ScheduleEntry(ApiModel):
     purchases: list[SchedulePriceObject] | None = None
     """
     Available purchases for this schedule entry
+    """
+
+
+class SearchResponse(ApiModel):
+    """
+    Response for GET /v1/search.
+    """
+
+    query: str
+    """
+    The search term, as received and trimmed.
+    """
+    results: list[SearchResult]
+    """
+    Matches, best first. Empty when nothing matches.
+    """
+    hasMore: bool
+    """
+    True when more matched than were returned. Narrow the search with a longer term, types, parkId or destinationId.
     """
 
 
