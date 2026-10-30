@@ -686,7 +686,7 @@ class TestEveryFieldReachesTheFile:
         # single-rider queue, so those columns are in the header and in no row.
         assert "singleRiderP90" in backfill.CSV_COLUMNS
         assert "singleRiderP90" not in seen
-        assert len(backfill.DATA_COLUMNS) == 36
+        assert len(backfill.DATA_COLUMNS) == 40
 
     def test_an_absent_stats_block_is_empty_cells_never_zeroes(self, tmp_path: Path) -> None:
         # A zero would read as "measured, and it was nothing". Absent means no
@@ -1268,7 +1268,7 @@ class TestTheCsvContractSharedWithTheJavaScriptSdk:
     def test_the_contract_is_not_trivially_satisfiable(self) -> None:
         # Guard the oracle: an empty or stub fixture would agree with anything.
         contract = json.loads((FIXTURES / "csv_contract.json").read_text(encoding="utf-8"))
-        assert len(contract["columns"]) == 41
+        assert len(contract["columns"]) == 45
         assert len(contract["fingerprint"]) == 16
         assert contract["columns"][:5] == backfill.IDENTITY_COLUMNS
 
