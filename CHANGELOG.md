@@ -1,6 +1,12 @@
 # Changelog
 
-## [Unreleased]
+## [5.0.0] - 2026-10-30
+
+A major version because **the CSV header changed**: four columns were added in the
+middle of it, so a reader that takes columns by position gets the wrong ones
+rather than an error. Read by name. The library API is backward compatible. The
+models are regenerated from the current spec, and `knownGaps` is now a required
+field on the coverage documents.
 
 ### Added
 
