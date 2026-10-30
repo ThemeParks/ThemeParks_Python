@@ -255,6 +255,7 @@ class TestCoverage:
             "lastRecordedAt": "2026-09-20",
             "retrievableThrough": "2026-09-20",
             "kinds": {},
+            "knownGaps": [],
         }
         doc = client(lambda r: httpx.Response(200, json=body)).entity("ride-1").history.coverage()
         assert doc.firstRecordedAt == _d(2021, 7, 3)
@@ -326,6 +327,7 @@ PARK_COVERAGE = {
     },
     "fields": {},
     "entities": [],
+    "knownGaps": [],
 }
 
 ENTITY_COVERAGE = {
@@ -339,6 +341,7 @@ ENTITY_COVERAGE = {
     "lastRecordedAt": "2026-09-22",
     "retrievableThrough": "2026-08-23",
     "kinds": {},
+    "knownGaps": [],
 }
 
 
